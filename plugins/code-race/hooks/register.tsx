@@ -103,11 +103,15 @@ async function call($: EngineInterface, path: string, body: unknown): Promise<Sn
 
 const colorOf = (c: unknown) => (typeof c === 'string' && /^#[0-9a-f]{6}$/i.test(c) ? c : GREY)
 
-// The race as an answer has it, on this machine's clock: the offset is measured at the
-// middle of the request. The server's finish stands over yours, since it is what the race
-// records; until it comes, yours shows.
+// The race as an answer has it, on this machine's clock. The offset between the clocks is
+// measured at the middle of each request and kept from the quickest one: a slow answer
+// (the first join wakes the server) would put it off by up to a second, and the countdown
+// would jump. The server's finish stands over yours, since it is what the race records;
+// until it comes, yours shows.
 function fromSnapshot(r: Race, s: Snapshot, sentAt: number, receivedAt: number): Race {
-  const offset = s.serverNow - (sentAt + receivedAt) / 2
+  const rtt = receivedAt - sentAt
+  const isBetter = r.offset === null || rtt <= r.rtt
+  const offset = isBetter ? s.serverNow - (sentAt + receivedAt) / 2 : r.offset!
   const local = (t: number | null) => (t === null ? null : t - offset)
   const racers: Racer[] = s.racers.flatMap((x): Racer[] => {
     if (x.kind === 'you') return []
@@ -125,6 +129,8 @@ function fromSnapshot(r: Race, s: Snapshot, sentAt: number, receivedAt: number):
     startAt: s.startAt - offset,
     racers,
     polledAt: receivedAt,
+    offset,
+    rtt: isBetter ? rtt : r.rtt,
     finishedAt,
     pos: finishedAt !== null ? s.code.length : r.pos,
   }
@@ -154,6 +160,8 @@ async function startRace($: EngineInterface) {
     startAt: now + JOIN_TIMEOUT_MS + COUNTDOWN_MS,
     racers: [],
     polledAt: now,
+    offset: null,
+    rtt: 1e9, // no answer yet: any first one is quicker
     pos: 0,
     wrong: 0,
     errors: 0,
@@ -205,6 +213,7 @@ const isCurrent = (r: Race | null): r is Race =>
   !!r &&
   typeof r.playerId === 'string' &&
   typeof r.isRestored === 'boolean' &&
+  'offset' in r &&
   Array.isArray(r.racers) &&
   r.racers.every(x => typeof x.hasLeft === 'boolean' && Array.isArray(x.marks))
 
@@ -305,14 +314,20 @@ function crown(x: number, y: number): string {
   return r(5, -4, 17, 3) + r(5, -8, 3, 4) + r(12, -9, 3, 5) + r(19, -8, 3, 4)
 }
 
-// A few pieces of confetti over the track when you won, scattered the same way each time.
+// A burst of confetti around the banner when you won, laid out the same way each time:
+// pieces on a golden-angle spiral, wide rather than tall to fit the track.
 function confetti(h: number): string {
-  const colors = [YOU, '#6a9bcc', '#788c5d', MEDALS[0], '#b0aea5']
-  return Array.from({ length: 28 }, (_, i) => {
-    const x = (i * 211) % W
-    const y = 2 + ((i * 53) % (h - 12))
-    const turn = (i * 47) % 90
-    return `<rect x="${x}" y="${y}" width="5" height="8" fill="${colors[i % colors.length]}" transform="rotate(${turn} ${x + 2} ${y + 4})"/>`
+  const colors = [YOU, '#6a9bcc', '#788c5d', MEDALS[0], '#c98bb9']
+  const cx = (NAME_W + FINISH) / 2
+  const cy = h / 2
+  return Array.from({ length: 48 }, (_, i) => {
+    const angle = i * 2.39996
+    const reach = 0.45 + ((i * 37) % 55) / 100
+    const x = Math.round(cx + Math.cos(angle) * reach * 300)
+    const y = Math.round(Math.min(h - 6, Math.max(2, cy + Math.sin(angle) * reach * (h / 2 + 6))))
+    const turn = (i * 47) % 180
+    const [w, l] = i % 3 === 0 ? [4, 4] : [3, 7]
+    return `<rect x="${x}" y="${y}" width="${w}" height="${l}" rx="1" fill="${colors[i % colors.length]}" transform="rotate(${turn} ${x} ${y})"/>`
   }).join('')
 }
 
@@ -492,23 +507,7 @@ export const register: Register = on => {
       // A plain picture, not a frame: a frame reloads, and flashes, on every redraw.
       track = <Svg source={trackSvg(r, now)} alt="Race track" height={trackHeight()} />
     } else {
-      // The terminal gives the band about half its height: the header and the line always
-      // show, your lane next, and the others as many as fit, so nothing scrolls away.
-      const width = Math.max(20, Math.min(60, e.props.bodyColumns - 24))
-      const elapsed = Math.max(0, now - r.startAt)
-      const share = (o: Racer) =>
-        o.kind === 'bot' ? (p.stage === 'racing' || p.stage === 'done' ? shareAt(o, elapsed) : 0) : len ? o.pos / len : 0
-      const room = Math.max(1, (e.props.maxRows || 6) - 1 - (p.stage === 'racing' ? 1 : 0))
-      const lanes = [{ name: r.me, share: len ? r.pos / len : 0 }, ...r.racers.map(o => ({ name: o.name, share: share(o) }))].slice(0, room)
-      track = (
-        <Box flexDirection="column">
-          {lanes.map((l, i) => {
-            const at = Math.round(l.share * (width - 1))
-            const line = `${l.name.slice(0, 10).padEnd(10)} ${'─'.repeat(at)}▟▙${'─'.repeat(width - 1 - at)}│`
-            return <Text color={i === 0 ? YOU : undefined} bold={i === 0} dimColor={i > 0}>{line}</Text>
-          })}
-        </Box>
-      )
+      track = terminalTrack(r, p, now, e.props.bodyColumns, e.props.maxRows, Box, Text)
     }
 
     // The line, a window around where you are: what you typed dim, the next character on
@@ -544,6 +543,76 @@ export const register: Register = on => {
       </Box>
     )
   })
+}
+
+// Claude Code's own mascot, as its welcome screen draws it: standing, and mid-stride.
+const CLAWD_STANDING = [' ▐▛███▜▌ ', '▝▜█████▛▘', '  ▘▘ ▝▝  ']
+const CLAWD_RUNNING = [' ▐▛███▛█ ', '▝▜██████▀', ' ▝▝   ▝▝ ']
+const CLAWD_SMALL = '▐▛█▜▌' // one row, for a short terminal
+
+// The terminal's track: three rows a lane with the mascot running along the bottom one,
+// or, when the band has no room for that, one row a lane with its head alone. The band
+// gets about half the terminal: the header and the line always show, your lane next, and
+// the others as many as fit, so nothing scrolls away.
+function terminalTrack(r: Race, p: Phase, now: number, columns: number, maxRows: number, Box: any, Text: any): RenderElement {
+  const len = r.code.length
+  const elapsed = Math.max(0, now - r.startAt)
+  const isRunning = p.stage === 'racing' || p.stage === 'done'
+  const share = (o: Racer) => (o.kind === 'bot' ? (isRunning ? shareAt(o, elapsed) : 0) : len ? o.pos / len : 0)
+  const order = [...r.racers.map(x => finishOf(r, x) ?? Infinity), r.finishedAt ?? Infinity].filter(t => t <= now).sort((a, b) => a - b)
+  const placeAt = (t: number | null) => (t === null || t > now ? null : order.indexOf(t) + 1)
+  const lanes = [
+    { name: r.me, color: YOU, share: len ? r.pos / len : 0, isYou: true, moving: p.stage === 'racing', place: placeAt(r.finishedAt) },
+    ...r.racers.map(o => {
+      const fin = finishOf(r, o)
+      return { name: o.name, color: o.color, share: share(o), isYou: false, moving: isRunning && (fin === null || fin > now) && !o.hasLeft, place: placeAt(fin) }
+    }),
+  ]
+  const free = Math.max(1, (maxRows || 6) - 1 - (p.stage === 'racing' ? 1 : 0))
+  const isBig = free >= lanes.length * 3
+  const width = Math.max(24, Math.min(64, columns - 20))
+  const step = Math.floor(now / 500) % 2 === 0
+  const tag = (place: number | null) => (p.stage === 'done' && place !== null ? ` ${['🥇', '🥈', '🥉'][place - 1] ?? PLACE[place - 1]}` : '')
+  const rows: RenderElement[] = []
+  for (const l of lanes.slice(0, isBig ? lanes.length : free)) {
+    const name = l.name.slice(0, 10).padEnd(10)
+    const label = <Text color={l.isYou ? YOU : undefined} bold={l.isYou} dimColor={!l.isYou}>{name}</Text>
+    if (!isBig) {
+      const at = Math.round(l.share * (width - CLAWD_SMALL.length))
+      rows.push(
+        <Text>
+          {label}
+          <Text dimColor>{` ${'─'.repeat(at)}`}</Text>
+          <Text color={l.color}>{CLAWD_SMALL}</Text>
+          <Text dimColor>{`${'─'.repeat(width - CLAWD_SMALL.length - at)}│`}</Text>
+          <Text bold={l.isYou}>{tag(l.place)}</Text>
+        </Text>,
+      )
+      continue
+    }
+    const art = l.moving && (l.isYou ? r.pos % 2 === 1 : step) ? CLAWD_RUNNING : CLAWD_STANDING
+    const at = Math.round(l.share * (width - 9))
+    const after = width - 9 - at
+    rows.push(<Text>{`${' '.repeat(11 + at)}`}<Text color={l.color}>{art[0]}</Text>{`${' '.repeat(after)}`}<Text dimColor>│</Text></Text>)
+    rows.push(
+      <Text>
+        {label}
+        {` ${' '.repeat(at)}`}
+        <Text color={l.color}>{art[1]}</Text>
+        {`${' '.repeat(after)}`}
+        <Text dimColor>│</Text>
+        <Text bold={l.isYou}>{tag(l.place)}</Text>
+      </Text>,
+    )
+    rows.push(
+      <Text>
+        <Text dimColor>{`${' '.repeat(11)}${'─'.repeat(at)}`}</Text>
+        <Text color={l.color}>{art[2]}</Text>
+        <Text dimColor>{`${'─'.repeat(after)}│`}</Text>
+      </Text>,
+    )
+  }
+  return <Box flexDirection="column">{rows}</Box>
 }
 
 // One clock for the race, every 250 ms: the server asked once a second while it runs, a

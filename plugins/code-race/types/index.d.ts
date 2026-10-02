@@ -21,6 +21,8 @@ export type Race = {
   startAt: number // GO: typing opens
   racers: Racer[]
   polledAt: number
+  offset: number | null // server clock minus this one, from the quickest answer so far
+  rtt: number // how long that answer took
   pos: number // how much of the line your message box matches
   wrong: number // characters in your box past that, which you have to delete
   errors: number
