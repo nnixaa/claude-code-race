@@ -131,6 +131,7 @@ function fromSnapshot(r: Race, s: Snapshot, sentAt: number, receivedAt: number):
     polledAt: receivedAt,
     offset,
     rtt: isBetter ? rtt : r.rtt,
+    tick: r.tick + 1,
     finishedAt,
     pos: finishedAt !== null ? s.code.length : r.pos,
   }
@@ -337,7 +338,7 @@ function trackSvg(r: Race, now: number): string {
   const p = phaseOf(r, now)
   const elapsed = Math.max(0, now - r.startAt)
   const isRunning = p.stage === 'racing' || p.stage === 'done'
-  const step = (Math.floor(now / 500) % 2) as 0 | 1
+  const step = (r.tick % 2) as 0 | 1 // a step per redraw
   const parts: string[] = [`<clipPath id="names"><rect x="0" y="0" width="${NAME_W - 6}" height="${trackHeight()}"/></clipPath>`]
 
   // Places among those already in.
@@ -545,15 +546,18 @@ export const register: Register = on => {
   })
 }
 
-// Claude Code's own mascot, as its welcome screen draws it: standing, and mid-stride.
-const CLAWD_STANDING = [' ▐▛███▜▌ ', '▝▜█████▛▘', '  ▘▘ ▝▝  ']
-const CLAWD_RUNNING = [' ▐▛███▛█ ', '▝▜██████▀', ' ▝▝   ▝▝ ']
-const CLAWD_SMALL = '▐▛█▜▌' // one row, for a short terminal
+// Claude Code's own mascot, as its welcome screen draws it: standing, and mid-stride. The
+// short form keeps the head and the legs, for a terminal with no room for three rows.
+const CLAWD = {
+  tall: { standing: [' ▐▛███▜▌ ', '▝▜█████▛▘', '  ▘▘ ▝▝  '], running: [' ▐▛███▛█ ', '▝▜██████▀', ' ▝▝   ▝▝ '] },
+  short: { standing: [' ▐▛███▜▌ ', '  ▘▘ ▝▝  '], running: [' ▐▛███▛█ ', ' ▝▝   ▝▝ '] },
+}
+const ART_W = 9
 
-// The terminal's track: three rows a lane with the mascot running along the bottom one,
-// or, when the band has no room for that, one row a lane with its head alone. The band
-// gets about half the terminal: the header and the line always show, your lane next, and
-// the others as many as fit, so nothing scrolls away.
+// The terminal's track: a lane per racer, the mascot running along its bottom row. The band
+// gets about half the terminal, so the size is chosen once from its height for all four
+// seats: tall where three rows a lane fit, short (two rows) otherwise, and then as many
+// lanes as fit, yours first; the header and the line always show.
 function terminalTrack(r: Race, p: Phase, now: number, columns: number, maxRows: number, Box: any, Text: any): RenderElement {
   const len = r.code.length
   const elapsed = Math.max(0, now - r.startAt)
@@ -568,49 +572,31 @@ function terminalTrack(r: Race, p: Phase, now: number, columns: number, maxRows:
       return { name: o.name, color: o.color, share: share(o), isYou: false, moving: isRunning && (fin === null || fin > now) && !o.hasLeft, place: placeAt(fin) }
     }),
   ]
-  const free = Math.max(1, (maxRows || 6) - 1 - (p.stage === 'racing' ? 1 : 0))
-  const isBig = free >= lanes.length * 3
+  const free = Math.max(2, (maxRows || 8) - 2) // less the header and the line
+  const size = free >= SEATS * 3 ? 'tall' : 'short'
+  const perLane = size === 'tall' ? 3 : 2
   const width = Math.max(24, Math.min(64, columns - 20))
-  const step = Math.floor(now / 500) % 2 === 0
+  const step = r.tick % 2 === 0 // a step per redraw
   const tag = (place: number | null) => (p.stage === 'done' && place !== null ? ` ${['🥇', '🥈', '🥉'][place - 1] ?? PLACE[place - 1]}` : '')
   const rows: RenderElement[] = []
-  for (const l of lanes.slice(0, isBig ? lanes.length : free)) {
-    const name = l.name.slice(0, 10).padEnd(10)
-    const label = <Text color={l.isYou ? YOU : undefined} bold={l.isYou} dimColor={!l.isYou}>{name}</Text>
-    if (!isBig) {
-      const at = Math.round(l.share * (width - CLAWD_SMALL.length))
+  for (const l of lanes.slice(0, Math.max(1, Math.floor(free / perLane)))) {
+    const art = (l.moving && (l.isYou ? r.pos % 2 === 1 : step) ? CLAWD[size].running : CLAWD[size].standing) as string[]
+    const at = Math.round(l.share * (width - ART_W))
+    const after = width - ART_W - at
+    const name = <Text color={l.isYou ? YOU : undefined} bold={l.isYou} dimColor={!l.isYou}>{l.name.slice(0, 10).padEnd(10)}</Text>
+    art.forEach((part, i) => {
+      const isTop = i === 0
+      const isGround = i === art.length - 1
       rows.push(
         <Text>
-          {label}
-          <Text dimColor>{` ${'─'.repeat(at)}`}</Text>
-          <Text color={l.color}>{CLAWD_SMALL}</Text>
-          <Text dimColor>{`${'─'.repeat(width - CLAWD_SMALL.length - at)}│`}</Text>
-          <Text bold={l.isYou}>{tag(l.place)}</Text>
+          {isTop ? name : ' '.repeat(10)}
+          <Text dimColor>{isGround ? ` ${'─'.repeat(at)}` : ` ${' '.repeat(at)}`}</Text>
+          <Text color={l.color}>{part}</Text>
+          <Text dimColor>{`${(isGround ? '─' : ' ').repeat(after)}│`}</Text>
+          {isTop && <Text bold={l.isYou}>{tag(l.place)}</Text>}
         </Text>,
       )
-      continue
-    }
-    const art = l.moving && (l.isYou ? r.pos % 2 === 1 : step) ? CLAWD_RUNNING : CLAWD_STANDING
-    const at = Math.round(l.share * (width - 9))
-    const after = width - 9 - at
-    rows.push(<Text>{`${' '.repeat(11 + at)}`}<Text color={l.color}>{art[0]}</Text>{`${' '.repeat(after)}`}<Text dimColor>│</Text></Text>)
-    rows.push(
-      <Text>
-        {label}
-        {` ${' '.repeat(at)}`}
-        <Text color={l.color}>{art[1]}</Text>
-        {`${' '.repeat(after)}`}
-        <Text dimColor>│</Text>
-        <Text bold={l.isYou}>{tag(l.place)}</Text>
-      </Text>,
-    )
-    rows.push(
-      <Text>
-        <Text dimColor>{`${' '.repeat(11)}${'─'.repeat(at)}`}</Text>
-        <Text color={l.color}>{art[2]}</Text>
-        <Text dimColor>{`${'─'.repeat(after)}│`}</Text>
-      </Text>,
-    )
+    })
   }
   return <Box flexDirection="column">{rows}</Box>
 }
@@ -646,7 +632,7 @@ async function tick($: EngineInterface) {
   const isLive = p.stage !== 'done' || (!p.othersIn && now < r.startAt + MAX_RACE_MS)
   if (r.roomId && r.roomId !== 'offline' && isLive && now - r.polledAt >= POLL_MS) return void (await poll($))
   if (r.roomId === 'offline' && isLive && p.stage !== 'joining' && now - r.polledAt >= POLL_MS) {
-    await update($, race, cur => (cur && cur.id === r.id ? { ...cur, polledAt: now } : cur)) // offline: a redraw a second
+    await update($, race, cur => (cur && cur.id === r.id ? { ...cur, polledAt: now, tick: cur.tick + 1 } : cur)) // offline: a redraw a second
     return
   }
   const key = phaseKey(r, now)

@@ -29,7 +29,7 @@ export type Race = {
   finishedAt: number | null
   draft: string | null // what was in your message box before the race, given back after
   isRestored: boolean // the message box has been given back
-  tick: number // bumped to redraw at a change of phase
+  tick: number // bumped on each answer and at each change of phase: a redraw, and a racer's next step
   note: string | null
 }
 
