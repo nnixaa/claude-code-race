@@ -502,62 +502,80 @@ export const register: Register = on => {
     const len = r.code.length
     const status = statusOf(r, p, now, e.surface === 'terminal')
 
-    let track: RenderElement
-    if (e.surface === 'desktop') {
-      const { Svg } = $.ui.resolve(e)
-      // A plain picture, not a frame: a frame reloads, and flashes, on every redraw.
-      track = <Svg source={trackSvg(r, now)} alt="Race track" height={trackHeight()} />
-    } else {
-      track = terminalTrack(r, p, now, e.props.bodyColumns, e.props.maxRows, Box, Text)
-    }
-
     // The line, a window around where you are: what you typed dim, the next character on
     // an orange ground (an underline would hide an underscore), then what is ahead; the
     // rest opens as you go.
-    const from = Math.max(0, r.pos - BEHIND)
-    const next_ = r.code[r.pos] === ' ' ? '␣' : (r.code[r.pos] ?? '')
-    const line =
-      p.stage === 'racing' ? (
+    const lineOf = (ahead: number) => {
+      const from = Math.max(0, r.pos - BEHIND)
+      const next_ = r.code[r.pos] === ' ' ? '␣' : (r.code[r.pos] ?? '')
+      return (
         <Text>
           <Text dimColor>{`${from > 0 ? '…' : ''}${r.code.slice(from, r.pos)}`}</Text>
           <Text bold color="#ffffff" backgroundColor={r.wrong > 0 ? 'error' : YOU}>{next_}</Text>
-          <Text>{r.code.slice(r.pos + 1, r.pos + 1 + AHEAD)}</Text>
-          <Text dimColor>{r.pos + 1 + AHEAD < len ? '…' : ''}</Text>
+          <Text>{r.code.slice(r.pos + 1, r.pos + 1 + ahead)}</Text>
+          <Text dimColor>{r.pos + 1 + ahead < len ? '…' : ''}</Text>
         </Text>
-      ) : null
+      )
+    }
 
     const isDone = p.stage === 'done'
-    return (
-      <Box flexDirection="column" rowGap={e.surface === 'terminal' ? 0 : 1} width="100%">
-        <Box flexDirection="row" columnGap={2} alignItems="center">
-          <Text bold>Code race</Text>
-          <Text dimColor>{status}</Text>
-          {isDone && <Button key="again" label="Rerace" variant="primary" onPress={() => startRace($)} />}
-          {isDone ? (
-            <Button key="quit" label="×" plain role="dismiss" onPress={() => quitRace($)} />
+    const quit = <Button key="quit" label="Quit" onPress={() => quitRace($)} />
+    const header = (
+      <Box flexDirection="row" columnGap={2} alignItems="center">
+        <Text bold>Code race</Text>
+        <Text dimColor>{status}</Text>
+        {isDone && <Button key="again" label="Rerace" variant="primary" onPress={() => startRace($)} />}
+        {isDone ? <Button key="quit" label="×" plain role="dismiss" onPress={() => quitRace($)} /> : quit}
+      </Box>
+    )
+
+    // The terminal: the lanes, then one row right over the prompt: the line while the race
+    // runs, the header otherwise. The band keeps its height from joining to the end.
+    if (e.surface === 'terminal') {
+      const ahead = Math.max(12, Math.min(AHEAD, e.props.bodyColumns - BEHIND - 14))
+      return (
+        <Box flexDirection="column" width="100%">
+          {terminalTrack(r, p, now, e.props.bodyColumns, e.props.maxRows, Box, Text)}
+          {p.stage === 'racing' ? (
+            <Box flexDirection="row" columnGap={2}>
+              {lineOf(ahead)}
+              {quit}
+            </Box>
           ) : (
-            <Button key="quit" label="Quit" onPress={() => quitRace($)} />
+            header
           )}
         </Box>
-        {track}
-        {line}
+      )
+    }
+
+    // The desktop: a plain picture, not a frame: a frame reloads, and flashes, on every redraw.
+    const { Svg } = $.ui.resolve(e)
+    return (
+      <Box flexDirection="column" rowGap={1} width="100%">
+        {header}
+        <Svg source={trackSvg(r, now)} alt="Race track" height={trackHeight()} />
+        {p.stage === 'racing' ? lineOf(AHEAD) : null}
       </Box>
     )
   })
 }
 
-// Claude Code's own mascot, as its welcome screen draws it: standing, and mid-stride. The
-// short form keeps the head and the legs, for a terminal with no room for three rows.
-const CLAWD = {
-  tall: { standing: [' ▐▛███▜▌ ', '▝▜█████▛▘', '  ▘▘ ▝▝  '], running: [' ▐▛███▛█ ', '▝▜██████▀', ' ▝▝   ▝▝ '] },
-  short: { standing: [' ▐▛███▜▌ ', '  ▘▘ ▝▝  '], running: [' ▐▛███▛█ ', ' ▝▝   ▝▝ '] },
-}
-const ART_W = 9
+// A small Clawd for the terminal, one row high: the orange block of Claude Code's mascot with
+// its black eyes, and arms that swing as it runs and go up over the line.
+const EYES = '#000000'
+const ARMS = { down: ['▗', '▖'], up: ['▝', '▘'], left: ['▝', '▖'], right: ['▗', '▘'] } as const
+const ART_W = 8
 
-// The terminal's track: a lane per racer, the mascot running along its bottom row. The band
-// gets about half the terminal, so the size is chosen once from its height for all four
-// seats: tall where three rows a lane fit, short (two rows) otherwise, and then as many
-// lanes as fit, yours first; the header and the line always show.
+function clawd(arms: keyof typeof ARMS, color: string) {
+  return [
+    { text: ARMS[arms][0], color },
+    { text: ' ▪  ▪ ', color: EYES, bg: color },
+    { text: ARMS[arms][1], color },
+  ]
+}
+
+// The terminal's track: a row a racer, an empty row between them where the band has room.
+// The room is judged once, for all four seats, so nothing moves as racers join.
 function terminalTrack(r: Race, p: Phase, now: number, columns: number, maxRows: number, Box: any, Text: any): RenderElement {
   const len = r.code.length
   const elapsed = Math.max(0, now - r.startAt)
@@ -572,31 +590,34 @@ function terminalTrack(r: Race, p: Phase, now: number, columns: number, maxRows:
       return { name: o.name, color: o.color, share: share(o), isYou: false, moving: isRunning && (fin === null || fin > now) && !o.hasLeft, place: placeAt(fin) }
     }),
   ]
-  const free = Math.max(2, (maxRows || 8) - 2) // less the header and the line
-  const size = free >= SEATS * 3 ? 'tall' : 'short'
-  const perLane = size === 'tall' ? 3 : 2
+  const free = Math.max(1, (maxRows || 8) - 1) // less the row under the lanes
+  const hasGaps = free >= SEATS * 2 - 1
   const width = Math.max(24, Math.min(64, columns - 20))
-  const step = r.tick % 2 === 0 // a step per redraw
   const tag = (place: number | null) => (p.stage === 'done' && place !== null ? ` ${['🥇', '🥈', '🥉'][place - 1] ?? PLACE[place - 1]}` : '')
   const rows: RenderElement[] = []
-  for (const l of lanes.slice(0, Math.max(1, Math.floor(free / perLane)))) {
-    const art = (l.moving && (l.isYou ? r.pos % 2 === 1 : step) ? CLAWD[size].running : CLAWD[size].standing) as string[]
+  const shown = Math.max(1, Math.min(SEATS, free))
+  lanes.slice(0, shown).forEach((l, i) => {
+    // A step a redraw for the others, a step a key for you.
+    const stride = l.isYou ? r.pos % 2 === 1 : r.tick % 2 === 0
+    const arms = l.place !== null ? 'up' : !l.moving ? 'down' : stride ? 'left' : 'right'
     const at = Math.round(l.share * (width - ART_W))
-    const after = width - ART_W - at
-    const name = <Text color={l.isYou ? YOU : undefined} bold={l.isYou} dimColor={!l.isYou}>{l.name.slice(0, 10).padEnd(10)}</Text>
-    art.forEach((part, i) => {
-      const isTop = i === 0
-      const isGround = i === art.length - 1
-      rows.push(
-        <Text>
-          {isTop ? name : ' '.repeat(10)}
-          <Text dimColor>{isGround ? ` ${'─'.repeat(at)}` : ` ${' '.repeat(at)}`}</Text>
-          <Text color={l.color}>{part}</Text>
-          <Text dimColor>{`${(isGround ? '─' : ' ').repeat(after)}│`}</Text>
-          {isTop && <Text bold={l.isYou}>{tag(l.place)}</Text>}
-        </Text>,
-      )
-    })
+    if (hasGaps && i > 0) rows.push(<Text key={`gap${i}`}> </Text>)
+    rows.push(
+      <Text key={`lane${i}`}>
+        <Text color={l.isYou ? YOU : undefined} bold={l.isYou} dimColor={!l.isYou}>{l.name.slice(0, 10).padEnd(10)}</Text>
+        <Text dimColor>{` ${'─'.repeat(at)}`}</Text>
+        {clawd(arms, l.color).map((g, j) => (
+          <Text key={j} color={g.color} backgroundColor={'bg' in g ? g.bg : undefined}>{g.text}</Text>
+        ))}
+        <Text dimColor>{`${'─'.repeat(width - ART_W - at)}│`}</Text>
+        <Text bold={l.isYou}>{tag(l.place)}</Text>
+      </Text>,
+    )
+  })
+  // Seats nobody has taken yet keep their rows, so the band doesn't grow as racers join.
+  for (let i = lanes.length; i < shown; i++) {
+    if (hasGaps) rows.push(<Text key={`gap${i}`}> </Text>)
+    rows.push(<Text key={`lane${i}`} dimColor>{`${'·'.padEnd(10)} ${'─'.repeat(width)}│`}</Text>)
   }
   return <Box flexDirection="column">{rows}</Box>
 }

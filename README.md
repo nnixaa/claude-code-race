@@ -13,7 +13,7 @@ Typing races against other Claude Code users, right above your prompt. Waiting o
 - Half the lines are code (TypeScript, Python, Go, SQL, shell, CSS) and half are short notes in the style of developer docs.
 - Whatever you had in the message box before the race is put back after it.
 - At the end: medals at the finish line, a crown for the winner, your place, words per minute and accuracy, and **Rerace**.
-- In the terminal every racer is Claude Code's own block-character mascot, running along its lane.
+- In the terminal every racer is a small one-row Clawd, Claude Code's mascot, swinging its arms as it runs and raising them at the finish.
 
 ## Install
 
@@ -57,7 +57,7 @@ Then point `SERVER` in `plugins/code-race/hooks/register.tsx` at your Worker. Fo
 ## Limitations
 
 - On the desktop app the Race button shows while Claude is thinking, not while a tool runs, and the other racers move once a second.
-- In a short terminal window the band shows your lane and the line, and other lanes as space allows.
+- In a very short terminal window the lanes sit right against each other; from about 26 rows there is a gap between them.
 
 ## License
 
