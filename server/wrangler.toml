@@ -7,8 +7,8 @@ compatibility_date = "2025-09-01"
 [vars]
 JOIN_CAP_PER_DAY = "1000"
 # How fast the bots type, in words a minute: one of each race picks a speed in this range.
-BOT_WPM_MIN = "18"
-BOT_WPM_MAX = "25"
+BOT_WPM_MIN = "28"
+BOT_WPM_MAX = "55"
 
 [[durable_objects.bindings]]
 name = "LOBBY"
