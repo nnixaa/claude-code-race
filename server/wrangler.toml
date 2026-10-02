@@ -1,0 +1,30 @@
+name = "code-race"
+main = "src/index.ts"
+compatibility_date = "2025-09-01"
+
+# A day's joins above this send everyone to bots: the free plan stops at 100k requests a
+# day, and a race costs a player about 70.
+[vars]
+JOIN_CAP_PER_DAY = "1000"
+# How fast the bots type, in words a minute: one of each race picks a speed in this range.
+BOT_WPM_MIN = "18"
+BOT_WPM_MAX = "25"
+
+[[durable_objects.bindings]]
+name = "LOBBY"
+class_name = "Lobby"
+
+[[durable_objects.bindings]]
+name = "ROOM"
+class_name = "Room"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["Lobby", "Room"]
+
+# Every race and every result, kept for leaderboards.
+[[d1_databases]]
+binding = "DB"
+database_name = "code-race"
+database_id = "23893d11-ce64-4a79-ab62-9a27f356d3ab"
+migrations_dir = "migrations"

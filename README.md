@@ -1,0 +1,63 @@
+# Code Race for Claude Code
+
+Typing races against other Claude Code users, right above your prompt. Waiting on Claude? Race.
+
+<img src="docs/finish.png" width="640" alt="The end of a race: four lanes with Claude's mascot in each, medals at the finish line, a crown on the winner, and You won! in the middle">
+
+## Play
+
+- Start a race with `/race`, or with the **Race** button beside the spinner while Claude is thinking.
+- Set your name with `/race nick <name>`; it starts a race too. Names are shown to everyone in the race.
+- Up to four people race the same line. The room waits 10 seconds for players, and bots take the seats nobody took, so there is always a race.
+- The line shows above the prompt and opens a little at a time. Type it in your message box. A mistake turns red until you delete it, and Enter sends nothing while a race runs.
+- Half the lines are code (TypeScript, Python, Go, SQL, shell, CSS) and half are short notes in the style of developer docs.
+- Whatever you had in the message box before the race is put back after it.
+- At the end: medals at the finish line, a crown for the winner, your place, words per minute and accuracy, and **Rerace**.
+
+## Install
+
+Requires Claude Code 2.1.284 or later. The terminal and the desktop app both work.
+
+```
+/plugin marketplace add nnixaa/claude-code-race
+/plugin install code-race@claude-code-race
+```
+
+Then start a new session.
+
+Code race is a mod: a plugin of function hooks, which Claude Code offers as an early-access surface, so a release may change how it looks or behaves.
+
+## What it sends
+
+To the race server, during a race: a random player id the plugin makes (with `desktop` or `terminal`, so the two apps are two players), your nickname, how far along the line you are, and how many mistakes you made. What you type stays on your machine; only the count of matching characters is sent. Nothing from your sessions, prompts, code or account is sent.
+
+The server keeps every race and result (the id, nickname, times, words per minute, accuracy) for leaderboards. Other racers see your nickname, never your id.
+
+Without the server the plugin races bots offline.
+
+## Server
+
+`server/` is the backend: a Cloudflare Worker with Durable Objects for the lobby and each race, and D1 for races and results. It runs on Cloudflare's free plan, with a daily cap on joins and a smaller one per address (`JOIN_CAP_PER_DAY` in `wrangler.toml`, `PER_ADDRESS_PER_DAY` in `src/index.ts`). How fast the bots type is `BOT_WPM_MIN` and `BOT_WPM_MAX`. To run your own:
+
+```
+cd server
+npm install
+npx wrangler d1 create code-race   # put its id in wrangler.toml
+npx wrangler d1 migrations apply code-race --remote
+npx wrangler deploy
+```
+
+Then point `SERVER` in `plugins/code-race/hooks/register.tsx` at your Worker. For local work, `npm run dev` serves it on port 8787, `npm run smoke` races two scripted players against it, and `node scripts/opponent.mjs [name] [wpm] [minutes] [server]` waits in the lobby and races whoever comes.
+
+## Working on the plugin
+
+`claude --plugin-dir plugins/code-race` loads it from this folder and reloads it on save. `claude plugin validate plugins/code-race` checks it the way Claude Code will. The engine writes the API's TypeScript declarations into `plugins/code-race/.claude-plugin/types` when it loads the plugin (or run `/plugin-types` there), and `tsconfig.json` uses them.
+
+## Limitations
+
+- On the desktop app the Race button shows while Claude is thinking, not while a tool runs, and the other racers move once a second.
+- In a short terminal window the band shows your lane and the line, and other lanes as space allows.
+
+## License
+
+[MIT](LICENSE)

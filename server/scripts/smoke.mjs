@@ -1,0 +1,25 @@
+// Two players race on a running server: npm run smoke [-- http://localhost:8787]
+const BASE = process.argv[2] ?? 'http://localhost:8787'
+const post = async (path, body) => (await fetch(BASE + path, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) })).json()
+const sleep = ms => new Promise(r => setTimeout(r, ms))
+const id = () => crypto.randomUUID()
+
+const a = id(), b = id()
+const ja = await post('/join', { player: a, name: 'alice' })
+const jb = await post('/join', { player: b, name: 'bob' })
+console.log('same room:', ja.roomId === jb.roomId, '| racers while forming:', jb.racers.map(r => `${r.name}:${r.kind}`).join(', '))
+await sleep(Math.max(0, jb.formingUntil - jb.serverNow) + 200)
+let s = await post(`/rooms/${ja.roomId}/progress`, { player: a, pos: 0 })
+console.log('after forming:', s.racers.map(r => `${r.name}:${r.kind}`).join(', '), '| starts in', s.startAt - s.serverNow, 'ms')
+await sleep(s.startAt - s.serverNow + 100)
+s = await post(`/rooms/${ja.roomId}/progress`, { player: a, pos: 999 })
+console.log('jump to 999 right away kept as:', s.racers.find(r => r.kind === 'you').pos)
+await sleep(1000)
+s = await post(`/rooms/${ja.roomId}/progress`, { player: a, pos: 30 })
+console.log('30 a second later kept as:', s.racers.find(r => r.kind === 'you').pos)
+for (let p = 30; p <= s.code.length; p += 20) { await sleep(1000); s = await post(`/rooms/${ja.roomId}/progress`, { player: a, pos: Math.min(p + 20, s.code.length) }) }
+const you = s.racers.find(r => r.kind === 'you')
+console.log('alice finished:', you.finishedAt !== null, 'pos', you.pos, '/', s.code.length)
+const sb = await post(`/rooms/${ja.roomId}/progress`, { player: b, pos: 5 })
+console.log('bob sees alice at', sb.racers.find(r => r.name === 'alice').pos, 'and himself at', sb.racers.find(r => r.kind === 'you').pos)
+console.log('bad id:', (await fetch(BASE + '/join', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ player: 'x' }) })).status)
