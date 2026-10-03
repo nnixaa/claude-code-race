@@ -2,7 +2,7 @@
 
 Typing races against other Claude Code users, right above your prompt. Waiting on Claude? Race.
 
-<img src="docs/finish.png" width="640" alt="The end of a race: four lanes with Claude's mascot in each, medals at the finish line, a crown on the winner, and You won! in the middle">
+<img src="docs/race.png" width="640" alt="A race in progress above the prompt: four lanes with Claude's mascot in each, the line to type with the next character highlighted, and the same line half typed in the message box">
 
 ## Play
 
