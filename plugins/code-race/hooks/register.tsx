@@ -727,16 +727,17 @@ export const register: Register = on => {
   })
 }
 
-// A small Clawd for the terminal, one row high: the orange block of Claude Code's mascot with
-// its black eyes, and arms that swing as it runs and go up over the line.
+// A small Clawd for the terminal, one row high and four cells wide: a body three cells
+// across with its two black eyes, and in the half cells at its sides the arms, which swing as
+// it runs and go up over the line.
 const EYES = '#000000'
-const ARMS = { down: ['▗', '▖'], up: ['▝', '▘'], left: ['▝', '▖'], right: ['▗', '▘'] } as const
-const ART_W = 8
+const ARMS = { down: ['▟', '▙'], up: ['▜', '▛'], left: ['▜', '▙'], right: ['▟', '▛'] } as const
+const ART_W = 4
 
 function clawd(arms: keyof typeof ARMS, color: string) {
   return [
     { text: ARMS[arms][0], color },
-    { text: ' ▪  ▪ ', color: EYES, bg: color },
+    { text: '▪▪', color: EYES, bg: color },
     { text: ARMS[arms][1], color },
   ]
 }

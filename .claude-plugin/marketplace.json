@@ -12,7 +12,7 @@
       "name": "code-race",
       "source": "./plugins/code-race",
       "description": "Race others at typing a line of code, right in Claude Code: start with /race (or the Race button while Claude thinks), type in your message box.",
-      "version": "0.5.1",
+      "version": "0.5.2",
       "category": "entertainment"
     }
   ]
