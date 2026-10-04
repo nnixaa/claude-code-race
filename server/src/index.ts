@@ -339,6 +339,25 @@ const json = (body: unknown, status = 200) => new Response(JSON.stringify(body),
 // A player id is the mod's own random string; a name is what the player chose, cleaned.
 const PLAYER = /^[a-z0-9-]{8,48}$/
 const nameOf = (raw: unknown) => (typeof raw === 'string' ? raw.replace(/[^\p{L}\p{N}_.-]/gu, '').slice(0, 16) : '') || 'anon'
+// A name is one player's: the first to race under it holds it, and anyone else under it
+// races as anon-… instead. Names starting with anon are nobody's.
+const ownerOf = (player: string) => player.replace(/-(?:desktop|terminal)$/, '')
+const anonOf = (player: string) => `anon-${ownerOf(player).slice(0, 4)}`
+async function claim(db: D1Database, player: string, name: string): Promise<boolean> {
+  const owner = ownerOf(player)
+  const key = name.toLowerCase()
+  await db.prepare('INSERT OR IGNORE INTO names (name, owner, claimed_at) VALUES (?, ?, ?)').bind(key, owner, Date.now()).run()
+  const holder = await db.prepare('SELECT owner FROM names WHERE name = ?').bind(key).first<string>('owner')
+  if (holder !== owner) return false
+  await db.prepare('DELETE FROM names WHERE owner = ? AND name <> ?').bind(owner, key).run() // one name a player
+  return true
+}
+async function nameFor(db: D1Database, player: string, raw: unknown): Promise<string> {
+  const name = nameOf(raw)
+  if (name.toLowerCase().startsWith('anon')) return anonOf(player)
+  return (await claim(db, player, name)) ? name : anonOf(player)
+}
+
 const newCode = () => Array.from(crypto.getRandomValues(new Uint8Array(5)), b => CODE_LETTERS[b % CODE_LETTERS.length]).join('')
 
 export default {
@@ -352,8 +371,15 @@ export default {
     const player = typeof body?.player === 'string' && PLAYER.test(body.player) ? body.player : null
     if (!player) return json({ error: 'bad player id' }, 400)
 
-    if (url.pathname === '/join') {
+    // Your name, claimed before a race: refused when it is someone else's.
+    if (url.pathname === '/nick') {
       const name = nameOf(body?.name)
+      if (name.toLowerCase().startsWith('anon')) return json({ refused: 'Names starting with anon are kept for players without one.' })
+      return (await claim(env.DB, player, name)) ? json({ name }) : json({ refused: `The name ${name} is taken.` })
+    }
+
+    if (url.pathname === '/join') {
+      const name = await nameFor(env.DB, player, body?.name)
       const lobby = env.LOBBY.get(env.LOBBY.idFromName('lobby'))
       // A room can close between the lobby's answer and the join: then ask once more.
       for (let attempt = 0; attempt < 2; attempt++) {
@@ -369,7 +395,7 @@ export default {
     // to read; the mod does not fall back to bots for it.
     const partyCode = url.pathname === '/party' ? null : url.pathname.match(/^\/party\/([A-Za-z2-9]{5})\/join$/)?.[1]?.toUpperCase()
     if (url.pathname === '/party' || partyCode) {
-      const name = nameOf(body?.name)
+      const name = await nameFor(env.DB, player, body?.name)
       const lobby = env.LOBBY.get(env.LOBBY.idFromName('lobby'))
       const no = await lobby.admit(request.headers.get('cf-connecting-ip') ?? 'unknown')
       if (no) return json({ refused: no })

@@ -127,6 +127,7 @@ function fromSnapshot(r: Race, s: Snapshot, sentAt: number, receivedAt: number):
   const finishedAt = yours?.finishedAt != null ? local(yours.finishedAt) : r.finishedAt
   return {
     ...r,
+    me: typeof yours?.name === 'string' ? yours.name : r.me, // as everyone sees it
     roomId: s.roomId,
     party: typeof s.party === 'string' ? s.party : null,
     code: s.code,
@@ -528,7 +529,7 @@ const phaseKey = (r: Race, now: number) => {
 let lastKey = ''
 
 const USAGE =
-  'Usage: /race to race whoever comes, /race friend to make a room for friends, /race join <code> to join one, /race top for the leaderboard, /race nick <name> to race under a name (letters, digits, _ . -).'
+  'Usage: /race to race whoever comes, /race friend to make a room for friends, /race join <code> to join one, /race top for the leaderboard, /race nick <name> to race under a name nobody else has (letters, digits, _ . -).'
 
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
@@ -561,7 +562,12 @@ export const register: Register = on => {
       const name = args.match(/^(?:nick|name)\s+(.+)$/)?.[1]
       const clean = name?.replace(/[^\p{L}\p{N}_.-]/gu, '').slice(0, 16)
       if (!clean) return { text: USAGE }
-      await $.store.set('name', clean)
+      // A name is one player's: the server says whether it is free.
+      const me = await playerOf($)
+      const answer = (await call($, '/nick', { player: me.id, name: clean })) as { name?: string; refused?: string } | null
+      if (!answer) return { text: 'The race server did not answer; your name is unchanged.' }
+      if (answer.refused) return { text: `${answer.refused} Pick another with /race nick <name>.` }
+      await $.store.set('name', answer.name ?? clean)
     }
     void startRace($)
     return { text: `${args ? `You race as ${(await $.store.get('name')) as string}. ` : ''}Looking for racers…` }
