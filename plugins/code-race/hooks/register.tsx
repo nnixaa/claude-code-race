@@ -494,15 +494,18 @@ function boardSvg(b: Board): string {
   label(COLS.best, 'Best wpm', 'end')
   label(COLS.races, 'Races', 'end')
   label(COLS.wins, 'Wins', 'end')
+  // Everything on the row's middle line: the medal's disc, the mascot's body, the text.
   const row = (x: Standing, y: number, color: string) => {
+    const mid = y + 13
+    const base = mid + 4.5 // a baseline that centres 13px text on the line
     if (x.isYou) parts.push(`<rect x="0" y="${y}" width="${W}" height="${BOARD_ROW - 4}" rx="6" fill="${YOU}" opacity=".12"/>`)
-    parts.push(x.place <= 3 ? medalAt(22, y + 12, x.place) : `<text class="d" x="22" y="${y + 17}" text-anchor="middle" ${SANS} font-size="13">${x.place}</text>`)
-    parts.push(`<g transform="translate(44 ${y + 5})">${mascot(color, 0)}</g>`)
+    parts.push(x.place <= 3 ? medalAt(22, mid - 1, x.place) : `<text class="d" x="22" y="${base}" text-anchor="middle" ${SANS} font-size="13">${x.place}</text>`)
+    parts.push(`<g transform="translate(44 ${mid - 2 * CELL})">${mascot(color, 0)}</g>`) // the body is four cells high
     const name = `${SANS} font-size="13" ${x.isYou ? `fill="${YOU}" font-weight="700"` : 'class="t"'}`
-    parts.push(`<text x="${COLS.name}" y="${y + 17}" ${name}>${escape(x.name.slice(0, 24))}</text>`)
-    parts.push(`<text class="t" x="${COLS.best}" y="${y + 17}" text-anchor="end" ${SANS} font-size="13" font-weight="700">${x.wpm}</text>`)
-    parts.push(`<text class="d" x="${COLS.races}" y="${y + 17}" text-anchor="end" ${SANS} font-size="13">${x.races}</text>`)
-    parts.push(`<text class="d" x="${COLS.wins}" y="${y + 17}" text-anchor="end" ${SANS} font-size="13">${x.wins}</text>`)
+    parts.push(`<text x="${COLS.name}" y="${base}" ${name}>${escape(x.name.slice(0, 24))}</text>`)
+    parts.push(`<text class="t" x="${COLS.best}" y="${base}" text-anchor="end" ${SANS} font-size="13" font-weight="700">${x.wpm}</text>`)
+    parts.push(`<text class="d" x="${COLS.races}" y="${base}" text-anchor="end" ${SANS} font-size="13">${x.races}</text>`)
+    parts.push(`<text class="d" x="${COLS.wins}" y="${base}" text-anchor="end" ${SANS} font-size="13">${x.wins}</text>`)
   }
   b.top.forEach((x, i) => row(x, 22 + i * BOARD_ROW, boardColor(x)))
   if (!b.top.length) parts.push(`<text class="d" x="${COLS.name}" y="${22 + 17}" ${SANS} font-size="13">No finished races yet.</text>`)
