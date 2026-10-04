@@ -6,16 +6,36 @@ Typing races against other Claude Code users, right above your prompt. Waiting o
 
 ## Play
 
-- Start a race with `/race`, or with the **Race** button beside the spinner while Claude is thinking.
-- Set your name with `/race nick <name>`; it starts a race too. A name is one player's: whoever first races under it keeps it, `/race nick` refuses a name that is taken, and anyone else under it races as `anon-…`. Names are shown to everyone in the race.
-- `/race top` shows the leaderboard above the prompt: medals for the top three, each racer's mascot, their fastest finished race, how many races they ran and won, and your row.
-- Up to four people race the same line. The room waits 10 seconds for players, and bots take the seats nobody took, so there is always a race.
-- To race friends, make a room with `/race friend`. It gets a five-letter code; your friends join with `/race join <code>` (**Copy invite** puts that on your clipboard). Anyone in the room presses **Start**, there are no bots, and **Rerace** takes everyone into the room's next race.
+| Command | |
+| --- | --- |
+| `/race` | Race whoever is around. The room waits 10 seconds for players, and bots take the seats nobody took, so there is always a race. |
+| `/race friend` | Make a room for your friends. It gets a five-letter code. |
+| `/race join <code>` | Join a friend's room. |
+| `/race top` | Show the leaderboard. |
+| `/race nick <name>` | Race under a name. It starts a race too. |
+
+While Claude is thinking, the **Race** button beside the spinner starts a race too.
+
+### A race
+
+- Up to four people race the same line. Half the lines are code (TypeScript, Python, Go, SQL, shell, CSS) and half are short notes in the style of developer docs.
 - The line shows above the prompt in a monospace face and opens a little at a time. Type it in your message box. A mistake turns red until you delete it, and Enter sends nothing while a race runs.
-- Half the lines are code (TypeScript, Python, Go, SQL, shell, CSS) and half are short notes in the style of developer docs.
 - Whatever you had in the message box before the race is put back after it.
 - At the end: medals at the finish line, a crown for the winner, your place, words per minute and accuracy, and **Rerace**.
-- In the terminal every racer is a small one-row Clawd, Claude Code's mascot, swinging its arms as it runs and raising them at the finish.
+- In the terminal every racer is a small Clawd, Claude Code's mascot, swinging its arms as it runs and raising them at the finish.
+
+### Racing friends
+
+- `/race friend` makes a room and shows its code. **Copy invite** puts `/race join <code>` on your clipboard to send.
+- Anyone in the room presses **Start**. There are no bots: only the people in the room race.
+- **Rerace** takes everyone into the room's next race, under the same code.
+
+### Leaderboard and names
+
+<img src="docs/leaderboard.png" width="640" alt="The leaderboard above the prompt: medals for the top three, each player's mascot, their fastest race, races and wins, and your row lit">
+
+- `/race top` ranks everyone by their fastest finished race, with how many races they ran and won. Your row is lit, and shown under the top ten when you are not in it.
+- A name is one player's. Whoever first races under it keeps it, `/race nick` refuses a name that is taken, and anyone else under it races as `anon-…`.
 
 ## Install
 
@@ -32,15 +52,15 @@ Code race is a mod: a plugin of function hooks, which Claude Code offers as an e
 
 ## What it sends
 
-To the race server, during a race: a random player id the plugin makes (with `desktop` or `terminal`, so the two apps are two players), your nickname, how far along the line you are, and how many mistakes you made. What you type stays on your machine; only the count of matching characters is sent. Nothing from your sessions, prompts, code or account is sent.
+To the race server: a random player id the plugin makes (with `desktop` or `terminal`, so the two apps are two players), your nickname, and during a race how far along the line you are and how many mistakes you made. A friends' room adds its code. What you type stays on your machine; only the count of matching characters is sent. Nothing from your sessions, prompts, code or account is sent.
 
-The server keeps every race and result (the id, nickname, times, words per minute, accuracy) for leaderboards. Other racers see your nickname, never your id.
+The server keeps every race and result (the id, nickname, times, words per minute, accuracy) and who holds each name, for the leaderboard. Other racers see your nickname, never your id.
 
 Without the server the plugin races bots offline.
 
 ## Server
 
-`server/` is the backend: a Cloudflare Worker with Durable Objects for the lobby and each race, and D1 for races and results. It runs on Cloudflare's free plan, with a daily cap on joins and a smaller one per address (`JOIN_CAP_PER_DAY` in `wrangler.toml`, `PER_ADDRESS_PER_DAY` in `src/index.ts`). How fast the bots type is `BOT_WPM_MIN` and `BOT_WPM_MAX`. To run your own:
+`server/` is the backend: a Cloudflare Worker with Durable Objects for the lobby, each race and each friends' room, and D1 for races, results and names. It runs on Cloudflare's free plan, with a daily cap on joins and a smaller one per address (`JOIN_CAP_PER_DAY` in `wrangler.toml`, `PER_ADDRESS_PER_DAY` in `src/index.ts`). How fast the bots type is `BOT_WPM_MIN` and `BOT_WPM_MAX`. To run your own:
 
 ```
 cd server
