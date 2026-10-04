@@ -443,8 +443,9 @@ function lineSvg(r: Race): string {
   const from = Math.max(0, r.pos - BEHIND)
   const typed = `${from > 0 ? '…' : ''}${r.code.slice(from, r.pos)}`
   const next = r.code[r.pos] ?? ''
-  const ahead = r.code.slice(r.pos + 1, r.pos + 1 + AHEAD)
-  const more = r.pos + 1 + AHEAD < r.code.length
+  const room = Math.floor(W / CHAR_W) - typed.length - 2 // to the right edge, less the cursor and the …
+  const ahead = r.code.slice(r.pos + 1, r.pos + 1 + room)
+  const more = r.pos + 1 + room < r.code.length
   const at = (typed.length * CHAR_W).toFixed(1)
   const y = 15
   // Spaces as no-break spaces: a surface may fold a space at the edge of a text away.
