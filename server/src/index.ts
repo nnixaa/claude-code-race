@@ -387,6 +387,22 @@ export default {
       return json({ refused: 'No room could be made.' })
     }
 
+    // The best: each player's fastest finished race, and where you stand among them.
+    if (url.pathname === '/leaderboard') {
+      const board = `WITH board AS (
+        SELECT r.player_id AS id, p.name, MAX(r.wpm) AS best, COUNT(*) AS races, SUM(r.place = 1) AS wins
+        FROM results r JOIN players p ON p.id = r.player_id
+        WHERE r.is_bot = 0 AND p.hidden = 0
+        GROUP BY r.player_id HAVING best IS NOT NULL)`
+      const [top, you] = await env.DB.batch<{ id: string; name: string; best: number; races: number; wins: number; place: number }>([
+        env.DB.prepare(`${board} SELECT (SELECT COUNT(*) FROM board b2 WHERE b2.best > b.best) + 1 AS place, b.* FROM board b ORDER BY best DESC, races DESC LIMIT 10`),
+        env.DB.prepare(`${board} SELECT (SELECT COUNT(*) FROM board b2 WHERE b2.best > b.best) + 1 AS place, b.* FROM board b WHERE b.id = ?`).bind(player),
+      ])
+      const row = (x: { id: string; name: string; best: number; races: number; wins: number; place: number }) =>
+        ({ place: x.place, name: x.name, wpm: Math.round(x.best), races: x.races, wins: x.wins, isYou: x.id === player })
+      return json({ top: top!.results.map(row), you: you!.results[0] ? row(you!.results[0]) : null })
+    }
+
     const starting = url.pathname.match(/^\/rooms\/([0-9a-f-]{36})\/start$/)
     if (starting) {
       const snapshot = await env.ROOM.get(env.ROOM.idFromName(starting[1]!)).start(player)

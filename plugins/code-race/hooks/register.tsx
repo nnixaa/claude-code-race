@@ -193,6 +193,23 @@ async function startRace($: EngineInterface, party: string | null = null) {
   })
 }
 
+// The leaderboard as text: the ten fastest races, one a player, and where you stand.
+type Standing = { place: number; name: string; wpm: number; races: number; wins: number; isYou: boolean }
+async function leaderboard($: EngineInterface): Promise<string> {
+  const me = await playerOf($)
+  let board: { top: Standing[]; you: Standing | null }
+  try {
+    const res = await $.http.fetch(SERVER + '/leaderboard', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ player: me.id }) })
+    if (!res.ok) throw new Error(String(res.status))
+    board = JSON.parse(res.text)
+  } catch {
+    return 'The race server did not answer.'
+  }
+  const line = (x: Standing) => `${x.place}. ${x.name} · ${x.wpm} wpm · ${x.races} race${x.races === 1 ? '' : 's'} · ${x.wins} win${x.wins === 1 ? '' : 's'}${x.isYou ? ' (you)' : ''}`
+  const you = board.you ? `You: #${board.you.place} · best ${board.you.wpm} wpm` : 'You: no finished race yet'
+  return ['Leaderboard, by the fastest race', ...board.top.map(line), you].join('\n')
+}
+
 async function refuse($: EngineInterface, why: string) {
   await update($, race, () => null)
   $.ui.toast(`Code race: ${why}`)
@@ -473,12 +490,12 @@ const phaseKey = (r: Race, now: number) => {
 let lastKey = ''
 
 const USAGE =
-  'Usage: /race to race whoever comes, /race friend to make a room for friends, /race join <code> to join one, /race nick <name> to race under a name (letters, digits, _ . -).'
+  'Usage: /race to race whoever comes, /race friend to make a room for friends, /race join <code> to join one, /race top for the leaderboard, /race nick <name> to race under a name (letters, digits, _ . -).'
 
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     // Immediate: a race starts at once, also while Claude is still answering.
-    await $.command.register({ name: 'race', description: 'Race others at typing a line of code', argumentHint: '[friend | join <code> | nick <name>]', immediate: true })
+    await $.command.register({ name: 'race', description: 'Race others at typing a line of code', argumentHint: '[friend | join <code> | top | nick <name>]', immediate: true })
     if (!isCurrent(await read($, race))) await update($, race, () => null)
     $.clock.every(250, () => tick($))
     return next(e)
@@ -486,6 +503,7 @@ export const register: Register = on => {
 
   on('command.run', { command: 'race' }, async ($, e) => {
     const args = e.args.trim()
+    if (/^(?:top|leaderboard|board|lb)$/i.test(args)) return { text: await leaderboard($) }
     if (/^(?:friend|friends|room|party)$/i.test(args)) {
       void startRace($, 'new')
       return { text: 'Making a room for friends…' }
