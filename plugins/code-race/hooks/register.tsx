@@ -432,30 +432,32 @@ function trackSvg(r: Race, now: number): string {
 }
 
 // The line on the desktop, drawn as a picture in a monospace face, which the surface's
-// text has none of: every character the same width, so each key moves the line one even
-// step. Where you are stays in one column and what you typed slides left under it.
+// text has none of: every character the same width, so the line never shifts unevenly. As
+// in the terminal: what you typed dim, the next character on an orange ground, then what is
+// ahead, opening as you go.
 const MONO = 'font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,monospace"'
-const LINE_FONT = 15
+const LINE_FONT = 13
 const CHAR_W = LINE_FONT * 0.6
-const LINE_H = 26
-const AT_COL = 16 // the column the next character sits in
-const LINE_COLS = Math.floor(W / CHAR_W) - 1
+const LINE_H = 22
 function lineSvg(r: Race): string {
-  const x = (col: number) => (col * CHAR_W).toFixed(1)
-  const typed = r.code.slice(Math.max(0, r.pos - AT_COL), r.pos)
+  const from = Math.max(0, r.pos - BEHIND)
+  const typed = `${from > 0 ? '…' : ''}${r.code.slice(from, r.pos)}`
   const next = r.code[r.pos] ?? ''
-  const ahead = r.code.slice(r.pos + 1, r.pos + 1 + (LINE_COLS - AT_COL - 2))
-  const more = r.pos + 1 + ahead.length < r.code.length
-  const y = 17
+  const ahead = r.code.slice(r.pos + 1, r.pos + 1 + AHEAD)
+  const more = r.pos + 1 + AHEAD < r.code.length
+  const at = (typed.length * CHAR_W).toFixed(1)
+  const y = 15
+  // Spaces as no-break spaces: a surface may fold a space at the edge of a text away.
+  const keep = (t: string) => escape(t).replace(/ /g, '\u00a0')
   return (
     `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${W} ${LINE_H}" width="${W}" height="${LINE_H}">` +
     '<style>.t{fill:#1f1e1d}.d{fill:#a29f96}@media (prefers-color-scheme:dark){.t{fill:#eceae4}.d{fill:#7d7a72}}</style>' +
-    `<g ${MONO} font-size="${LINE_FONT}" xml:space="preserve" style="white-space:pre">` +
+    `<g ${MONO} font-size="${LINE_FONT}">` +
     // What you typed ends where you are, whatever the face's real width.
-    `<text class="d" x="${x(AT_COL)}" y="${y}" text-anchor="end">${escape(typed)}</text>` +
-    `<rect x="${x(AT_COL)}" y="3" width="${CHAR_W.toFixed(1)}" height="20" rx="2" fill="${r.wrong > 0 ? '#c4473a' : YOU}"/>` +
-    `<text x="${x(AT_COL + 0.5)}" y="${y}" text-anchor="middle" fill="#ffffff" font-weight="700">${next === ' ' ? '·' : escape(next)}</text>` +
-    `<text class="t" x="${x(AT_COL + 1)}" y="${y}">${escape(ahead)}${more ? '<tspan class="d">…</tspan>' : ''}</text>` +
+    `<text class="d" x="${at}" y="${y}" text-anchor="end">${keep(typed)}</text>` +
+    `<rect x="${at}" y="3" width="${CHAR_W.toFixed(1)}" height="17" rx="2" fill="${r.wrong > 0 ? '#c4473a' : YOU}"/>` +
+    `<text x="${at}" y="${y}" fill="#ffffff" font-weight="700">${keep(next)}</text>` +
+    `<text class="t" x="${((typed.length + 1) * CHAR_W).toFixed(1)}" y="${y}">${keep(ahead)}${more ? '<tspan class="d">…</tspan>' : ''}</text>` +
     '</g></svg>'
   )
 }
