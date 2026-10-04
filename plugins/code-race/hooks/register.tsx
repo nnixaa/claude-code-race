@@ -1,6 +1,8 @@
 // Code race: type a line of code faster than the others.
 //
 // The server matches up to four people into a race and fills the empty seats with bots.
+// Friends can have a room of their own instead: /race friend makes one under a code, the
+// others join with /race join <code>, and the race starts when one of them presses Start.
 // The band above the prompt shows the track and, under it, the line, opening a little at
 // a time. You type in Claude's own message box: what matches the line moves you on, a
 // mistake turns red there until you delete it, and Enter sends nothing while a race runs.
@@ -12,7 +14,7 @@
 // animation, so the racers move in steps of a second. Without the server the race is
 // against bots alone.
 import { atom, read, update } from 'claude-code'
-import type { EngineInterface, PromptDecoration, Register, RenderElement } from 'claude-code'
+import type { EngineInterface, PromptDecoration, Register, RenderElement, RenderSurface } from 'claude-code'
 
 import type { Race, Racer } from '../types'
 
@@ -85,9 +87,10 @@ async function playerOf($: EngineInterface): Promise<{ id: string; name: string 
 
 type HumanSeat = { kind: 'you' | 'human'; name: string; color: string; pos: number; finishedAt: number | null; left?: boolean }
 type BotSeat = { kind: 'bot'; name: string; color: string; finishMs: number; marks: number[] }
-type Snapshot = { roomId: string; serverNow: number; code: string; formingUntil: number; startAt: number; racers: (HumanSeat | BotSeat)[] }
+type Snapshot = { roomId: string; party?: string | null; serverNow: number; code: string; formingUntil: number; startAt: number; racers: (HumanSeat | BotSeat)[] }
+type Answer = Snapshot | { offline: string } | { refused: string }
 
-async function call($: EngineInterface, path: string, body: unknown): Promise<Snapshot | { offline: string } | null> {
+async function call($: EngineInterface, path: string, body: unknown): Promise<Answer | null> {
   try {
     const res = await $.http.fetch(SERVER + path, {
       method: 'POST',
@@ -95,7 +98,7 @@ async function call($: EngineInterface, path: string, body: unknown): Promise<Sn
       body: JSON.stringify(body),
     })
     if (!res.ok) return null
-    return JSON.parse(res.text) as Snapshot | { offline: string }
+    return JSON.parse(res.text) as Answer
   } catch {
     return null
   }
@@ -124,6 +127,7 @@ function fromSnapshot(r: Race, s: Snapshot, sentAt: number, receivedAt: number):
   return {
     ...r,
     roomId: s.roomId,
+    party: typeof s.party === 'string' ? s.party : null,
     code: s.code,
     formingUntil: s.formingUntil - offset,
     startAt: s.startAt - offset,
@@ -145,7 +149,9 @@ function offlineRace(r: Race, now: number, note: string): Race {
   return { ...r, roomId: 'offline', code, formingUntil: now + 1500, startAt: now + 1500 + COUNTDOWN_MS, racers, note }
 }
 
-async function startRace($: EngineInterface) {
+// `party`: 'new' makes a friends' room, a code joins one (or its next round); none races
+// whoever comes.
+async function startRace($: EngineInterface, party: string | null = null) {
   const now = await $.clock.now()
   await leaveRace($) // a race still running is left, its seat freed and your draft put back
   const me = await playerOf($)
@@ -156,6 +162,7 @@ async function startRace($: EngineInterface) {
     me: me.name,
     playerId: me.id,
     roomId: null,
+    party,
     code: '',
     formingUntil: now + JOIN_TIMEOUT_MS,
     startAt: now + JOIN_TIMEOUT_MS + COUNTDOWN_MS,
@@ -172,13 +179,34 @@ async function startRace($: EngineInterface) {
     tick: 0,
     note: null,
   }))
-  const answer = await call($, '/join', { player: me.id, name: me.name })
+  const path = party === null ? '/join' : party === 'new' ? '/party' : `/party/${party}/join`
+  const answer = await call($, path, { player: me.id, name: me.name })
   const at = await $.clock.now()
+  const cur = await read($, race)
+  if (!cur || cur.id !== id || cur.roomId !== null) return
+  // Friends get no bots in their place: a room that cannot be had is said so.
+  if (party !== null && !(answer && 'roomId' in answer)) return void (await refuse($, answer && 'refused' in answer ? answer.refused : 'The race server did not answer.'))
   await update($, race, (cur): Race | null => {
     if (!cur || cur.id !== id || cur.roomId !== null) return cur
     if (answer && 'roomId' in answer) return fromSnapshot(cur, answer, now, at)
     return offlineRace(cur, at, answer && 'offline' in answer ? answer.offline : 'Server unreachable')
   })
+}
+
+async function refuse($: EngineInterface, why: string) {
+  await update($, race, () => null)
+  $.ui.toast(`Code race: ${why}`)
+}
+
+// Start, in a friends' room: the countdown begins for everyone at their next answer.
+async function startParty($: EngineInterface) {
+  const r = await read($, race)
+  if (!isCurrent(r) || !r.party || !r.roomId) return
+  const sentAt = await $.clock.now()
+  const answer = await call($, `/rooms/${r.roomId}/start`, { player: r.playerId })
+  if (!answer || !('roomId' in answer)) return
+  const at = await $.clock.now()
+  await update($, race, cur => (cur && cur.id === r.id ? fromSnapshot(cur, answer, sentAt, at) : cur))
 }
 
 async function poll($: EngineInterface) {
@@ -237,7 +265,8 @@ function phaseOf(r: Race, now: number) {
   const count = stage === 'countdown' ? Math.ceil((r.startAt - now) / 1000) : 0
   const showsGo = stage === 'racing' && now < r.startAt + GO_MS
   const graceLeft = stage === 'racing' && othersIn ? Math.ceil((endAt - now) / 1000) : null
-  const waitLeft = stage === 'joining' && r.roomId ? Math.max(0, Math.ceil((r.formingUntil - now) / 1000)) : null
+  // A friends' room waits for Start, not for a clock.
+  const waitLeft = stage === 'joining' && r.roomId && !r.party ? Math.max(0, Math.ceil((r.formingUntil - now) / 1000)) : null
   return { stage, count, showsGo, graceLeft, waitLeft, isOut, othersIn, endAt }
 }
 
@@ -376,8 +405,8 @@ function trackSvg(r: Race, now: number): string {
     parts.push(`<g transform="translate(${x} ${y})" opacity="${o.hasLeft ? 0.4 : 1}">${mascot(o.color, isMoving ? step : 0)}</g>`)
     marks(y, placeAt(fin), false, x)
   })
-  // Seats nobody has taken yet, until the bots take them.
-  if (p.stage === 'joining' || p.stage === 'countdown') {
+  // Seats nobody has taken yet, until the bots take them; friends race without.
+  if (p.stage === 'joining' || (p.stage === 'countdown' && !r.party)) {
     for (let i = r.racers.length + 1; i < SEATS; i++) {
       const y = TOP + i * LANE
       parts.push(`<text x="8" y="${y + 16}" ${SANS} font-size="13" fill="#c9c3b6">…</text>`)
@@ -394,11 +423,41 @@ function trackSvg(r: Race, now: number): string {
   const isWin = p.stage === 'done' && !p.isOut && placeOf(r) === 1
   if (isWin) parts.unshift(confetti(h))
   if (p.waitLeft !== null && p.waitLeft > 0) banner(`${p.waitLeft}s`, 26)
+  if (p.stage === 'joining' && r.party && r.roomId) banner(escape(r.party), 26)
   if (p.stage === 'countdown') banner(String(p.count), 32)
   if (p.showsGo) banner('GO!', 32)
   if (p.isOut) banner('Race over', 24)
   else if (p.stage === 'done') banner(placeWord(placeOf(r)), 24)
   return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${W} ${h}" width="${W}" height="${h}" shape-rendering="crispEdges">${parts.join('')}</svg>`
+}
+
+// The line on the desktop, drawn as a picture in a monospace face, which the surface's
+// text has none of: every character the same width, so each key moves the line one even
+// step. Where you are stays in one column and what you typed slides left under it.
+const MONO = 'font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,monospace"'
+const LINE_FONT = 15
+const CHAR_W = LINE_FONT * 0.6
+const LINE_H = 26
+const AT_COL = 16 // the column the next character sits in
+const LINE_COLS = Math.floor(W / CHAR_W) - 1
+function lineSvg(r: Race): string {
+  const x = (col: number) => (col * CHAR_W).toFixed(1)
+  const typed = r.code.slice(Math.max(0, r.pos - AT_COL), r.pos)
+  const next = r.code[r.pos] ?? ''
+  const ahead = r.code.slice(r.pos + 1, r.pos + 1 + (LINE_COLS - AT_COL - 2))
+  const more = r.pos + 1 + ahead.length < r.code.length
+  const y = 17
+  return (
+    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${W} ${LINE_H}" width="${W}" height="${LINE_H}">` +
+    '<style>.t{fill:#1f1e1d}.d{fill:#a29f96}@media (prefers-color-scheme:dark){.t{fill:#eceae4}.d{fill:#7d7a72}}</style>' +
+    `<g ${MONO} font-size="${LINE_FONT}" xml:space="preserve" style="white-space:pre">` +
+    // What you typed ends where you are, whatever the face's real width.
+    `<text class="d" x="${x(AT_COL)}" y="${y}" text-anchor="end">${escape(typed)}</text>` +
+    `<rect x="${x(AT_COL)}" y="3" width="${CHAR_W.toFixed(1)}" height="20" rx="2" fill="${r.wrong > 0 ? '#c4473a' : YOU}"/>` +
+    `<text x="${x(AT_COL + 0.5)}" y="${y}" text-anchor="middle" fill="#ffffff" font-weight="700">${next === ' ' ? '·' : escape(next)}</text>` +
+    `<text class="t" x="${x(AT_COL + 1)}" y="${y}">${escape(ahead)}${more ? '<tspan class="d">…</tspan>' : ''}</text>` +
+    '</g></svg>'
+  )
 }
 
 // --- the mod -----------------------------------------------------------------------------
@@ -410,12 +469,13 @@ const phaseKey = (r: Race, now: number) => {
 }
 let lastKey = ''
 
-const USAGE = 'Usage: /race to race, or /race nick <name> to race under a name (letters, digits, _ . -).'
+const USAGE =
+  'Usage: /race to race whoever comes, /race friend to make a room for friends, /race join <code> to join one, /race nick <name> to race under a name (letters, digits, _ . -).'
 
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     // Immediate: a race starts at once, also while Claude is still answering.
-    await $.command.register({ name: 'race', description: 'Race others at typing a line of code', argumentHint: '[nick <name>]', immediate: true })
+    await $.command.register({ name: 'race', description: 'Race others at typing a line of code', argumentHint: '[friend | join <code> | nick <name>]', immediate: true })
     if (!isCurrent(await read($, race))) await update($, race, () => null)
     $.clock.every(250, () => tick($))
     return next(e)
@@ -423,6 +483,16 @@ export const register: Register = on => {
 
   on('command.run', { command: 'race' }, async ($, e) => {
     const args = e.args.trim()
+    if (/^(?:friend|friends|room|party)$/i.test(args)) {
+      void startRace($, 'new')
+      return { text: 'Making a room for friends…' }
+    }
+    const join = args.match(/^join\s+(\S+)$/i)?.[1]
+    if (join) {
+      if (!/^[a-z2-9]{5}$/i.test(join)) return { text: `${join} is not a room code: it has five letters and digits, like K7QMX.` }
+      void startRace($, join.toUpperCase())
+      return { text: `Joining room ${join.toUpperCase()}…` }
+    }
     if (args) {
       const name = args.match(/^(?:nick|name)\s+(.+)$/)?.[1]
       const clean = name?.replace(/[^\p{L}\p{N}_.-]/gu, '').slice(0, 16)
@@ -519,12 +589,20 @@ export const register: Register = on => {
     }
 
     const isDone = p.stage === 'done'
+    const isWaiting = p.stage === 'joining' && !!r.party && !!r.roomId // a friends' room, filling up
     const quit = <Button key="quit" label="Quit" onPress={() => quitRace($)} />
+    const invite = `/race join ${r.party}`
+    const copy = async (surface: RenderSurface) => {
+      const { isCopied } = await $.ui.copy({ text: invite, surface })
+      $.ui.toast(isCopied ? `Copied: ${invite}` : `Send your friends: ${invite}`)
+    }
     const header = (
       <Box flexDirection="row" columnGap={2} alignItems="center">
         <Text bold>Code race</Text>
         <Text dimColor>{status}</Text>
-        {isDone && <Button key="again" label="Rerace" variant="primary" onPress={() => startRace($)} />}
+        {isWaiting && <Button key="start" label="Start" variant="primary" onPress={() => startParty($)} />}
+        {isWaiting && <Button key="copy" label="Copy invite" onPress={press => copy(press.surface)} />}
+        {isDone && <Button key="again" label="Rerace" variant="primary" onPress={() => startRace($, r.party)} />}
         {isDone ? <Button key="quit" label="×" plain role="dismiss" onPress={() => quitRace($)} /> : quit}
       </Box>
     )
@@ -554,7 +632,7 @@ export const register: Register = on => {
       <Box flexDirection="column" rowGap={1} width="100%">
         {header}
         <Svg source={trackSvg(r, now)} alt="Race track" height={trackHeight()} />
-        {p.stage === 'racing' ? lineOf(AHEAD) : null}
+        {p.stage === 'racing' ? <Svg source={lineSvg(r)} alt={r.code} height={LINE_H} /> : null}
       </Box>
     )
   })
@@ -633,6 +711,7 @@ async function tick($: EngineInterface) {
 
   // No answer from the server in time: race bots instead.
   if (r.roomId === null && now >= r.formingUntil) {
+    if (r.party) return void (await refuse($, 'The race server did not answer.'))
     await update($, race, cur => (cur && cur.id === r.id && cur.roomId === null ? offlineRace(cur, now, 'Server unreachable') : cur))
     return
   }
@@ -667,9 +746,12 @@ type Phase = ReturnType<typeof phaseOf>
 
 function statusOf(r: Race, p: Phase, now: number, isTerminal: boolean): string {
   const humans = r.racers.filter(o => o.kind === 'human').length + 1
-  const bots = SEATS - humans
+  const bots = r.racers.filter(o => o.kind === 'bot').length
   const who = `${humans} ${humans === 1 ? 'person' : 'people'}${bots ? `, ${bots} bot${bots === 1 ? '' : 's'}` : ''}`
   if (p.stage === 'joining') {
+    if (r.party === 'new' && !r.roomId) return 'Making a room…'
+    if (r.party && !r.roomId) return `Joining room ${r.party}…`
+    if (r.party) return `Room ${r.party} · ${humans}/${SEATS} in · friends join with /race join ${r.party}`
     if (r.roomId === 'offline') return `${r.note ?? 'Offline'} · racing bots`
     return `Finding racers… ${humans}/${SEATS}${p.waitLeft !== null ? ` · ${p.waitLeft}s` : ''}`
   }

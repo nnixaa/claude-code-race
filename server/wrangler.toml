@@ -18,9 +18,17 @@ class_name = "Lobby"
 name = "ROOM"
 class_name = "Room"
 
+[[durable_objects.bindings]]
+name = "PARTY"
+class_name = "Party"
+
 [[migrations]]
 tag = "v1"
 new_sqlite_classes = ["Lobby", "Room"]
+
+[[migrations]]
+tag = "v2"
+new_sqlite_classes = ["Party"]
 
 # Every race and every result, kept for leaderboards.
 [[d1_databases]]

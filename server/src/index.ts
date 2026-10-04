@@ -3,6 +3,8 @@
 // The mod polls: it joins through the lobby, then posts its position about once a second
 // and gets everyone's back in the same answer. Seats nobody took when the room closes are
 // raced by bots, whose runs are decided by the server so every player sees the same ones.
+// Friends race in a room of their own instead, under a five-letter code: no bots, and the
+// race starts when one of them presses Start.
 // Every race someone typed in is written to the database once it is over: the text,
 // everyone in it, bots included, and how each of them did. A player is a random id the
 // mod made and a nickname.
@@ -13,6 +15,7 @@ import { CODE, TEXTS } from './texts'
 interface Env {
   LOBBY: DurableObjectNamespace<Lobby>
   ROOM: DurableObjectNamespace<Room>
+  PARTY: DurableObjectNamespace<Party>
   DB: D1Database
   JOIN_CAP_PER_DAY: string
   BOT_WPM_MIN: string
@@ -28,6 +31,9 @@ const SETTLE_MS = 10_000 // after the last finish, before the race is written
 const SAVE_EVERY_MS = 5000 // how often the room keeps a copy of itself while it runs
 const QUIET_MS = 15_000 // a racer silent this long after the start is no longer waited for
 const PER_ADDRESS_PER_DAY = 150 // races one address may join in a day
+const PARTY_WAIT_MS = 15 * 60_000 // a friends' room starts by itself if nobody presses Start
+const PARTY_IDLE_MS = 2 * 60 * 60_000 // a room code unused this long is let go
+const CODE_LETTERS = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789' // none of I L O 0 1, which read alike
 const SEGMENTS = 6
 const COLORS = ['#6a9bcc', '#788c5d', '#b0aea5', '#c98bb9', '#e3b341']
 const BOT_NAMES = ['mira', 'devon', 'kenji', 'ola', 'sam', 'priya', 'lucas', 'noor', 'ivan', 'zoe']
@@ -53,6 +59,7 @@ type RaceState = {
   startAt: number
   humans: Human[]
   bots: Bot[]
+  party: string | null // the friends' room code, or null for a race with whoever came
   savedAt: number // the last copy kept in storage
   isWritten: boolean // in the database
 }
@@ -60,6 +67,7 @@ type RaceState = {
 // What a player gets back: the race as it stands, times on the server's clock.
 export type Snapshot = {
   roomId: string
+  party: string | null
   serverNow: number
   code: string
   formingUntil: number
@@ -91,23 +99,55 @@ export class Lobby extends DurableObject<Env> {
   private forming: { id: string; until: number; players: Set<string> } | null = null
   private perAddress = { day: '', counts: new Map<string, number>() }
 
-  async join(player: string, address: string): Promise<{ roomId: string; formingUntil: number } | { offline: string }> {
-    const now = Date.now()
-    const day = new Date(now).toISOString().slice(0, 10)
+  // One more join today, or why not.
+  async admit(address: string): Promise<string | null> {
+    const day = new Date().toISOString().slice(0, 10)
     if (this.perAddress.day !== day) this.perAddress = { day, counts: new Map() }
     const mine = (this.perAddress.counts.get(address) ?? 0) + 1
-    if (mine > PER_ADDRESS_PER_DAY) return { offline: 'That is enough races from here for today.' }
+    if (mine > PER_ADDRESS_PER_DAY) return 'That is enough races from here for today.'
     this.perAddress.counts.set(address, mine)
     const count = (await this.ctx.storage.get<{ day: string; n: number }>('joins')) ?? { day, n: 0 }
     const n = count.day === day ? count.n : 0
-    if (n >= Number(this.env.JOIN_CAP_PER_DAY || 1000)) return { offline: 'The game is full for today.' }
+    if (n >= Number(this.env.JOIN_CAP_PER_DAY || 1000)) return 'The game is full for today.'
     await this.ctx.storage.put('joins', { day, n: n + 1 })
+    return null
+  }
+
+  async join(player: string, address: string): Promise<{ roomId: string; formingUntil: number } | { offline: string }> {
+    const no = await this.admit(address)
+    if (no) return { offline: no }
+    const now = Date.now()
     // A seat for each player, once: a double press of Race does not take two.
     if (!this.forming || this.forming.until - now < 1000 || (this.forming.players.size >= SEATS && !this.forming.players.has(player))) {
       this.forming = { id: crypto.randomUUID(), until: now + FORM_MS, players: new Set() }
     }
     this.forming.players.add(player)
     return { roomId: this.forming.id, formingUntil: this.forming.until }
+  }
+}
+
+// A room of friends under a code: the round now open in it, and a new round once that one
+// has started. Joining by the code and pressing Rerace in one of its races both land in the
+// open round, so the same friends race again together.
+type PartyState = { roomId: string; formingUntil: number }
+export class Party extends DurableObject<Env> {
+  // `isNew`: making the room, so a code already in use answers null; else joining it, so a
+  // code nobody made answers null.
+  async open(isNew: boolean): Promise<PartyState | null> {
+    const now = Date.now()
+    let p = await this.ctx.storage.get<PartyState>('party')
+    if (isNew ? p : !p) return null
+    if (p && (now >= p.formingUntil || !(await this.env.ROOM.get(this.env.ROOM.idFromName(p.roomId)).isForming()))) p = undefined
+    if (!p) {
+      p = { roomId: crypto.randomUUID(), formingUntil: now + PARTY_WAIT_MS }
+      await this.ctx.storage.put('party', p)
+    }
+    await this.ctx.storage.setAlarm(now + PARTY_IDLE_MS)
+    return p
+  }
+
+  async alarm() {
+    await this.ctx.storage.deleteAll()
   }
 }
 
@@ -129,7 +169,7 @@ export class Room extends DurableObject<Env> {
     await this.ctx.storage.put('race', r)
   }
 
-  async join(roomId: string, formingUntil: number, player: string, name: string): Promise<Snapshot | null> {
+  async join(roomId: string, formingUntil: number, player: string, name: string, party: string | null = null): Promise<Snapshot | null> {
     const now = Date.now()
     let r = await this.load()
     if (!r) {
@@ -143,9 +183,11 @@ export class Room extends DurableObject<Env> {
         formingUntil,
         startAt: formingUntil + COUNTDOWN_MS, // typing opens at GO
         humans: [],
-        bots: names
-          .slice(0, SEATS - 1)
-          .map((n, i) => botOf(n, COLORS[i + 1]!, code.length, Number(this.env.BOT_WPM_MIN || 28), Number(this.env.BOT_WPM_MAX || 55))),
+        // Friends race each other alone.
+        bots: party
+          ? []
+          : names.slice(0, SEATS - 1).map((n, i) => botOf(n, COLORS[i + 1]!, code.length, Number(this.env.BOT_WPM_MIN || 28), Number(this.env.BOT_WPM_MAX || 55))),
+        party,
         savedAt: 0,
         isWritten: false,
       }
@@ -156,7 +198,28 @@ export class Room extends DurableObject<Env> {
       // Two people under one nickname are told apart.
       let shown = name
       for (let n = 2; r.humans.some(h => h.name === shown); n++) shown = `${name}${n}`
-      r.humans.push({ id: player, nick: name, name: shown, color: COLORS[r.humans.length]!, pos: 0, finishedAt: null, lastAt: now, errors: null, leftAt: null })
+      const color = COLORS.find(c => !r!.humans.some(h => h.color === c))!
+      r.humans.push({ id: player, nick: name, name: shown, color, pos: 0, finishedAt: null, lastAt: now, errors: null, leftAt: null })
+      await this.keep(now, true)
+    }
+    return this.snapshot(player, now)
+  }
+
+  // Still taking players: a room not made yet will be.
+  async isForming(): Promise<boolean> {
+    const r = await this.load()
+    return !r || (!r.isWritten && Date.now() < r.formingUntil)
+  }
+
+  // Start, pressed in a friends' room by one of its players: the countdown begins now.
+  async start(player: string): Promise<Snapshot | null> {
+    const now = Date.now()
+    const r = await this.load()
+    if (!r || !r.party || !r.humans.some(h => h.id === player)) return null
+    if (now < r.formingUntil) {
+      r.formingUntil = now
+      r.startAt = now + COUNTDOWN_MS
+      await this.ctx.storage.setAlarm(r.startAt + MAX_RACE_MS)
       await this.keep(now, true)
     }
     return this.snapshot(player, now)
@@ -191,12 +254,16 @@ export class Room extends DurableObject<Env> {
     return this.snapshot(player, now)
   }
 
-  // You quit: the others stop waiting for you, and you get no place.
+  // You quit: the others stop waiting for you, and you get no place. Before the start, your
+  // seat is free again.
   async leave(player: string): Promise<boolean> {
     const r = await this.load()
     const you = r?.humans.find(h => h.id === player)
     if (!r || !you || r.isWritten) return false
-    if (you.finishedAt === null && you.leftAt === null) {
+    if (Date.now() < r.formingUntil) {
+      r.humans = r.humans.filter(h => h !== you)
+      await this.keep(Date.now(), true)
+    } else if (you.finishedAt === null && you.leftAt === null) {
       you.leftAt = Date.now()
       await this.keep(you.leftAt, true)
     }
@@ -213,9 +280,10 @@ export class Room extends DurableObject<Env> {
     await this.ctx.storage.deleteAll()
   }
 
-  // The bots in the seats nobody took, in the colors that follow the humans'.
+  // The bots in the seats nobody took, in the colors the humans left.
   private seatedBots(r: RaceState): Bot[] {
-    return r.bots.slice(0, SEATS - r.humans.length).map((b, i) => ({ ...b, color: COLORS[r.humans.length + i]! }))
+    const free = COLORS.filter(c => !r.humans.some(h => h.color === c))
+    return r.bots.slice(0, SEATS - r.humans.length).map((b, i) => ({ ...b, color: free[i]! }))
   }
 
   // The race and everyone's result, bots included, in one batch.
@@ -229,8 +297,8 @@ export class Room extends DurableObject<Env> {
     const order = runs.filter(x => x.finishMs !== null).sort((a, b) => a.finishMs! - b.finishMs!)
     const db = this.env.DB
     const statements = [
-      db.prepare('INSERT OR IGNORE INTO races (id, text, kind, created_at, start_at, ended_at, humans, bots) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
-        .bind(r.id, r.code, r.kind, r.createdAt, r.startAt, now, r.humans.length, bots.length),
+      db.prepare('INSERT OR IGNORE INTO races (id, text, kind, created_at, start_at, ended_at, humans, bots, party) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
+        .bind(r.id, r.code, r.kind, r.createdAt, r.startAt, now, r.humans.length, bots.length, r.party ?? null),
       ...r.humans.map(h =>
         db
           .prepare('INSERT INTO players (id, name, first_seen, last_seen) VALUES (?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET name = excluded.name, last_seen = excluded.last_seen WHERE excluded.last_seen > players.last_seen')
@@ -262,7 +330,7 @@ export class Room extends DurableObject<Env> {
     }))
     // Bots take the seats left once the room has closed.
     const bots: Racer[] = now >= r.formingUntil ? this.seatedBots(r).map(b => ({ kind: 'bot', name: b.name, color: b.color, finishMs: b.finishMs, marks: b.marks })) : []
-    return { roomId: r.id, serverNow: now, code: r.code, formingUntil: r.formingUntil, startAt: r.startAt, racers: [...humans, ...bots] }
+    return { roomId: r.id, party: r.party ?? null, serverNow: now, code: r.code, formingUntil: r.formingUntil, startAt: r.startAt, racers: [...humans, ...bots] }
   }
 }
 
@@ -271,6 +339,7 @@ const json = (body: unknown, status = 200) => new Response(JSON.stringify(body),
 // A player id is the mod's own random string; a name is what the player chose, cleaned.
 const PLAYER = /^[a-z0-9-]{8,48}$/
 const nameOf = (raw: unknown) => (typeof raw === 'string' ? raw.replace(/[^\p{L}\p{N}_.-]/gu, '').slice(0, 16) : '') || 'anon'
+const newCode = () => Array.from(crypto.getRandomValues(new Uint8Array(5)), b => CODE_LETTERS[b % CODE_LETTERS.length]).join('')
 
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
@@ -294,6 +363,34 @@ export default {
         if (snapshot) return json(snapshot)
       }
       return json({ offline: 'No room could be found.' })
+    }
+
+    // A friends' room: made with a new code, or joined by one. A refusal is for the player
+    // to read; the mod does not fall back to bots for it.
+    const partyCode = url.pathname === '/party' ? null : url.pathname.match(/^\/party\/([A-Za-z2-9]{5})\/join$/)?.[1]?.toUpperCase()
+    if (url.pathname === '/party' || partyCode) {
+      const name = nameOf(body?.name)
+      const lobby = env.LOBBY.get(env.LOBBY.idFromName('lobby'))
+      const no = await lobby.admit(request.headers.get('cf-connecting-ip') ?? 'unknown')
+      if (no) return json({ refused: no })
+      for (let attempt = 0; attempt < 5; attempt++) {
+        const code = partyCode ?? newCode()
+        const seat = await env.PARTY.get(env.PARTY.idFromName(code)).open(!partyCode)
+        if (!seat) {
+          if (partyCode) return json({ refused: `No room with the code ${code}.` })
+          continue // that code is taken: another
+        }
+        const snapshot = await env.ROOM.get(env.ROOM.idFromName(seat.roomId)).join(seat.roomId, seat.formingUntil, player, name, code)
+        if (snapshot) return json(snapshot)
+        if (partyCode && attempt > 0) return json({ refused: `Room ${code} is full.` })
+      }
+      return json({ refused: 'No room could be made.' })
+    }
+
+    const starting = url.pathname.match(/^\/rooms\/([0-9a-f-]{36})\/start$/)
+    if (starting) {
+      const snapshot = await env.ROOM.get(env.ROOM.idFromName(starting[1]!)).start(player)
+      return snapshot ? json(snapshot) : json({ error: 'no such race' }, 404)
     }
 
     const leaving = url.pathname.match(/^\/rooms\/([0-9a-f-]{36})\/leave$/)

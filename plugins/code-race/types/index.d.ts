@@ -16,6 +16,7 @@ export type Race = {
   me: string // your nickname
   playerId: string // the id this race joined with, used for all its calls
   roomId: string | null // null while joining; 'offline' when racing bots alone
+  party: string | null // a friends' room: its code ('new' while it is being made); null for a race with whoever comes
   code: string
   formingUntil: number // when the room closes and the countdown starts
   startAt: number // GO: typing opens
