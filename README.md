@@ -8,7 +8,7 @@ Typing races against other Claude Code users, right above your prompt. Waiting o
 
 - Start a race with `/race`, or with the **Race** button beside the spinner while Claude is thinking.
 - Set your name with `/race nick <name>`; it starts a race too. Names are shown to everyone in the race.
-- `/race top` shows the leaderboard: everyone's fastest finished race, how many races they ran and won, and your place.
+- `/race top` shows the leaderboard above the prompt: medals for the top three, each racer's mascot, their fastest finished race, how many races they ran and won, and your row.
 - Up to four people race the same line. The room waits 10 seconds for players, and bots take the seats nobody took, so there is always a race.
 - To race friends, make a room with `/race friend`. It gets a five-letter code; your friends join with `/race join <code>` (**Copy invite** puts that on your clipboard). Anyone in the room presses **Start**, there are no bots, and **Rerace** takes everyone into the room's next race.
 - The line shows above the prompt in a monospace face and opens a little at a time. Type it in your message box. A mistake turns red until you delete it, and Enter sends nothing while a race runs.

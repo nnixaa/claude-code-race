@@ -16,10 +16,11 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, PromptDecoration, Register, RenderElement, RenderSurface } from 'claude-code'
 
-import type { Race, Racer } from '../types'
+import type { Board, Race, Racer, Standing } from '../types'
 
 const SERVER = 'https://code-race.agentloom-app.workers.dev'
 const race = atom({ plugin: 'code-race', key: 'race' } as const, null as Race | null)
+const board = atom({ plugin: 'code-race', key: 'board' } as const, null as Board | null)
 
 const SEATS = 4
 const COUNTDOWN_MS = 3000
@@ -154,6 +155,7 @@ function offlineRace(r: Race, now: number, note: string): Race {
 async function startRace($: EngineInterface, party: string | null = null) {
   const now = await $.clock.now()
   await leaveRace($) // a race still running is left, its seat freed and your draft put back
+  await update($, board, () => null)
   const me = await playerOf($)
   const id = now
   // Joining: drawn at once, filled in by the server's answer.
@@ -193,21 +195,17 @@ async function startRace($: EngineInterface, party: string | null = null) {
   })
 }
 
-// The leaderboard as text: the ten fastest races, one a player, and where you stand.
-type Standing = { place: number; name: string; wpm: number; races: number; wins: number; isYou: boolean }
-async function leaderboard($: EngineInterface): Promise<string> {
+// The leaderboard: the ten fastest players, each by their fastest finished race, and you.
+async function fetchBoard($: EngineInterface): Promise<Board | null> {
   const me = await playerOf($)
-  let board: { top: Standing[]; you: Standing | null }
   try {
     const res = await $.http.fetch(SERVER + '/leaderboard', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ player: me.id }) })
-    if (!res.ok) throw new Error(String(res.status))
-    board = JSON.parse(res.text)
+    if (!res.ok) return null
+    const b = JSON.parse(res.text) as Board
+    return Array.isArray(b.top) ? b : null
   } catch {
-    return 'The race server did not answer.'
+    return null
   }
-  const line = (x: Standing) => `${x.place}. ${x.name} · ${x.wpm} wpm · ${x.races} race${x.races === 1 ? '' : 's'} · ${x.wins} win${x.wins === 1 ? '' : 's'}${x.isYou ? ' (you)' : ''}`
-  const you = board.you ? `You: #${board.you.place} · best ${board.you.wpm} wpm` : 'You: no finished race yet'
-  return ['Leaderboard, by the fastest race', ...board.top.map(line), you].join('\n')
 }
 
 async function refuse($: EngineInterface, why: string) {
@@ -347,8 +345,9 @@ const escape = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').rep
 // A medal right of the finish line for places 1 to 3, the place in words after that.
 function medal(y: number, place: number, isYou: boolean): string {
   if (place > 3) return `<text x="${FINISH + 9}" y="${y + 13}" ${SANS} font-size="12" fill="${GREY}" font-weight="${isYou ? 700 : 400}">${PLACE[place - 1]}</text>`
-  const cx = FINISH + 18
-  const cy = y + 9
+  return medalAt(FINISH + 18, y + 9, place)
+}
+function medalAt(cx: number, cy: number, place: number): string {
   const ribbon = `<path d="M${cx - 5} ${cy - 10} L${cx - 2} ${cy - 3} L${cx + 2} ${cy - 3} L${cx + 5} ${cy - 10} Z" fill="${YOU}" opacity=".8"/>`
   const disc = `<circle cx="${cx}" cy="${cy + 1}" r="7" fill="${MEDALS[place - 1]}"/>`
   const digit = `<text x="${cx}" y="${cy + 4.5}" text-anchor="middle" ${SANS} font-size="9" font-weight="800" fill="#1f1e1d">${place}</text>`
@@ -480,6 +479,42 @@ function lineSvg(r: Race): string {
   )
 }
 
+// The leaderboard on the desktop, as a picture: a medal or the place, the racer's mascot,
+// the name, then the fastest race, races and wins in columns; your row lit as your lane is.
+const BOARD_ROW = 30
+const BOARD_COLORS = ['#6a9bcc', '#788c5d', '#c98bb9', '#e3b341', '#b0aea5']
+const COLS = { name: 84, best: 560, races: 650, wins: 740 }
+// A player keeps a colour from the name, wherever they place; yours is orange.
+const boardColor = (x: Standing) => (x.isYou ? YOU : BOARD_COLORS[[...x.name].reduce((h, c) => (h * 31 + c.charCodeAt(0)) >>> 0, 7) % BOARD_COLORS.length]!)
+const boardHeight = (b: Board) => 24 + Math.max(1, b.top.length) * BOARD_ROW + (b.you && !b.top.some(x => x.isYou) ? BOARD_ROW + 12 : 0)
+function boardSvg(b: Board): string {
+  const parts: string[] = ['<style>.t{fill:#1f1e1d}.d{fill:#8a857c}@media (prefers-color-scheme:dark){.t{fill:#eceae4}.d{fill:#9a968d}}</style>']
+  const label = (x: number, text: string, anchor = 'start') => parts.push(`<text class="d" x="${x}" y="14" text-anchor="${anchor}" ${SANS} font-size="11">${text}</text>`)
+  label(COLS.name, 'Player')
+  label(COLS.best, 'Best wpm', 'end')
+  label(COLS.races, 'Races', 'end')
+  label(COLS.wins, 'Wins', 'end')
+  const row = (x: Standing, y: number, color: string) => {
+    if (x.isYou) parts.push(`<rect x="0" y="${y}" width="${W}" height="${BOARD_ROW - 4}" rx="6" fill="${YOU}" opacity=".12"/>`)
+    parts.push(x.place <= 3 ? medalAt(22, y + 12, x.place) : `<text class="d" x="22" y="${y + 17}" text-anchor="middle" ${SANS} font-size="13">${x.place}</text>`)
+    parts.push(`<g transform="translate(44 ${y + 5})">${mascot(color, 0)}</g>`)
+    const name = `${SANS} font-size="13" ${x.isYou ? `fill="${YOU}" font-weight="700"` : 'class="t"'}`
+    parts.push(`<text x="${COLS.name}" y="${y + 17}" ${name}>${escape(x.name.slice(0, 24))}</text>`)
+    parts.push(`<text class="t" x="${COLS.best}" y="${y + 17}" text-anchor="end" ${SANS} font-size="13" font-weight="700">${x.wpm}</text>`)
+    parts.push(`<text class="d" x="${COLS.races}" y="${y + 17}" text-anchor="end" ${SANS} font-size="13">${x.races}</text>`)
+    parts.push(`<text class="d" x="${COLS.wins}" y="${y + 17}" text-anchor="end" ${SANS} font-size="13">${x.wins}</text>`)
+  }
+  b.top.forEach((x, i) => row(x, 22 + i * BOARD_ROW, boardColor(x)))
+  if (!b.top.length) parts.push(`<text class="d" x="${COLS.name}" y="${22 + 17}" ${SANS} font-size="13">No finished races yet.</text>`)
+  if (b.you && !b.top.some(x => x.isYou)) {
+    const y = 22 + Math.max(1, b.top.length) * BOARD_ROW + 12
+    parts.push(`<text class="d" x="22" y="${y - 8}" text-anchor="middle" ${SANS} font-size="13">⋯</text>`)
+    row(b.you, y, YOU)
+  }
+  const h = boardHeight(b)
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${W} ${h}" width="${W}" height="${h}">${parts.join('')}</svg>`
+}
+
 // --- the mod -----------------------------------------------------------------------------
 
 // What the band shows changes with time alone at these moments; a redraw is asked for then.
@@ -503,7 +538,12 @@ export const register: Register = on => {
 
   on('command.run', { command: 'race' }, async ($, e) => {
     const args = e.args.trim()
-    if (/^(?:top|leaderboard|board|lb)$/i.test(args)) return { text: await leaderboard($) }
+    if (/^(?:top|leaderboard|board|lb)$/i.test(args)) {
+      const b = await fetchBoard($)
+      if (!b) return { text: 'The race server did not answer.' }
+      await update($, board, () => b)
+      return { text: 'The leaderboard is above the prompt.' }
+    }
     if (/^(?:friend|friends|room|party)$/i.test(args)) {
       void startRace($, 'new')
       return { text: 'Making a room for friends…' }
@@ -586,10 +626,38 @@ export const register: Register = on => {
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     if (e.props.hasSurvey || (e.surface !== 'terminal' && e.surface !== 'desktop')) return next(e)
     const r = await read($, race)
-    if (!isCurrent(r)) return next(e)
+    const b = await read($, board)
     const now = await $.clock.now()
-    const p = phaseOf(r, now)
     const { Box, Text, Button } = $.ui.resolve(e)
+
+    // The leaderboard, asked for with /race top, while no race runs.
+    if (b && (!isCurrent(r) || phaseOf(r, now).stage === 'done')) {
+      const head = (
+        <Box flexDirection="row" columnGap={2} alignItems="center">
+          <Text bold>Code race</Text>
+          <Text dimColor>Leaderboard · each player's fastest race</Text>
+          <Button key="close" label="×" plain role="dismiss" onPress={() => update($, board, () => null)} />
+        </Box>
+      )
+      if (e.surface === 'desktop') {
+        const { Svg } = $.ui.resolve(e)
+        return (
+          <Box flexDirection="column" rowGap={1} width="100%">
+            {head}
+            <Svg source={boardSvg(b)} alt="Leaderboard" height={boardHeight(b)} />
+          </Box>
+        )
+      }
+      return (
+        <Box flexDirection="column" width="100%">
+          {head}
+          {terminalBoard(b, e.props.maxRows, Text)}
+        </Box>
+      )
+    }
+
+    if (!isCurrent(r)) return next(e)
+    const p = phaseOf(r, now)
     const len = r.code.length
     const status = statusOf(r, p, now, e.surface === 'terminal')
 
@@ -719,6 +787,29 @@ function terminalTrack(r: Race, p: Phase, now: number, columns: number, maxRows:
     rows.push(<Text key={`lane${i}`} dimColor>{`${'·'.padEnd(10)} ${'─'.repeat(width)}│`}</Text>)
   }
   return <Box flexDirection="column">{rows}</Box>
+}
+
+// The leaderboard in the terminal: columns lined up, a medal or the place, a small Clawd in
+// the racer's colour, and as many rows as the band has room for.
+function terminalBoard(b: Board, maxRows: number, Text: any): RenderElement[] {
+  const you = b.you && !b.top.some(x => x.isYou) ? b.you : null
+  const room = Math.max(3, (maxRows || 14) - 2 - (you ? 1 : 0))
+  const cells = (x: Standing) =>
+    `${x.name.slice(0, 16).padEnd(16)}${String(x.wpm).padStart(9)}${String(x.races).padStart(7)}${String(x.wins).padStart(6)}`
+  const row = (x: Standing, color: string) => (
+    <Text key={`row${x.place}${x.name}`}>
+      <Text>{x.place <= 3 ? `${['🥇', '🥈', '🥉'][x.place - 1]} ` : `${String(x.place).padStart(2)} `}</Text>
+      {clawd('down', color).map((g, j) => (
+        <Text key={j} color={g.color} backgroundColor={'bg' in g ? g.bg : undefined}>{g.text}</Text>
+      ))}
+      <Text color={x.isYou ? YOU : undefined} bold={x.isYou}>{` ${cells(x)}`}</Text>
+    </Text>
+  )
+  return [
+    <Text key="head" dimColor>{`${' '.repeat(3 + ART_W)} ${'Player'.padEnd(16)}${'Best wpm'.padStart(9)}${'Races'.padStart(7)}${'Wins'.padStart(6)}`}</Text>,
+    ...(b.top.length ? b.top.slice(0, room).map(x => row(x, boardColor(x))) : [<Text key="none" dimColor>No finished races yet.</Text>]),
+    ...(you ? [row(you, YOU)] : []),
+  ]
 }
 
 // One clock for the race, every 250 ms: the server asked once a second while it runs, a

@@ -34,8 +34,13 @@ export type Race = {
   note: string | null
 }
 
+// A row of the leaderboard: a player's fastest finished race, how many they ran and won.
+export type Standing = { place: number; name: string; wpm: number; races: number; wins: number; isYou: boolean }
+// The leaderboard as shown above the prompt: the ten best, and you wherever you are.
+export type Board = { top: Standing[]; you: Standing | null }
+
 declare module 'claude-code' {
   interface PluginState {
-    'code-race': { race: Race | null }
+    'code-race': { race: Race | null; board: Board | null }
   }
 }
